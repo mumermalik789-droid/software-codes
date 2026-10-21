@@ -1,0 +1,1052 @@
+import base64
+import csv
+from datetime import date, datetime
+import hashlib
+from io import BytesIO
+import json
+import os
+import re
+import urllib.parse
+
+import anthropic
+import docx
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import parse_xml
+from docx.oxml.ns import nsdecls
+from PIL import Image
+import streamlit as st
+
+# ---------------------------------------------------------------------
+# Page Setup & Professional Theme Styling
+# ---------------------------------------------------------------------
+st.set_page_config(
+    page_title="Pakistani Legal AI Portal (Multi-Chamber Edition)",
+    page_icon="⚖️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+st.markdown(
+    """
+    <style>
+    .main { background-color: #f8f9fa; }
+    .stButton>button { background-color: #1b4332; color: white; font-weight: bold; border-radius: 6px; padding: 0.5rem 1rem; border: none; }
+    .stButton>button:hover { background-color: #2d6a4f; color: white; }
+    h1, h2, h3 { color: #1b4332; font-family: 'Helvetica Neue', sans-serif; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ---------------------------------------------------------------------
+# AUTHENTICATION & MULTI-CHAMBER DATABASE MANAGEMENT
+# ---------------------------------------------------------------------
+USERS_FILE = "chamber_users.json"
+
+
+def load_users():
+  if os.path.exists(USERS_FILE):
+    try:
+      with open(USERS_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+    except Exception:
+      return {}
+  return {}
+
+
+def save_users(users_db):
+  try:
+    with open(USERS_FILE, "w", encoding="utf-8") as f:
+      json.dump(users_db, f, ensure_ascii=False, indent=4)
+  except Exception:
+    pass
+
+
+def hash_password(password):
+  return hashlib.sha256(password.encode()).hexdigest()
+
+
+if "authenticated_user" not in st.session_state:
+  st.session_state.authenticated_user = None
+
+users_db = load_users()
+
+# ---------------------------------------------------------------------
+# LOGIN & SIGNUP SCREEN
+# ---------------------------------------------------------------------
+if st.session_state.authenticated_user is None:
+  st.title("⚖️ PAKISTANI LEGAL AI PORTAL - CHAMBER ACCESS")
+  st.caption("Bar Chamber Management Portal - Multi-Tenancy System")
+  st.markdown("---")
+
+  tab_login, tab_signup = st.tabs(["🔐 Chamber Login", "📝 Register New Chamber"])
+
+  with tab_login:
+    st.subheader("Login to Your Chamber Account")
+    login_user = st.text_input("Chamber Username / ID:", key="login_user")
+    login_pass = st.text_input("Password:", type="password", key="login_pass")
+
+    if st.button("🔑 Login to Chamber", type="primary"):
+      hashed_pass = hash_password(login_pass)
+      if login_user in users_db and users_db[login_user]["password"] == hashed_pass:
+        st.session_state.authenticated_user = login_user
+        st.success(f"Welcome, {users_db[login_user]['chamber_name']}!")
+        st.rerun()
+      else:
+        st.error("Invalid Username or Password!")
+
+  with tab_signup:
+    st.subheader("Create a New Chamber Profile")
+    new_chamber = st.text_input("Chamber / Law Firm Name:")
+    new_user = st.text_input("Choose Username / Chamber ID:")
+    new_pass = st.text_input("Choose Password:", type="password")
+
+    if st.button("✨ Register Chamber"):
+      if new_chamber and new_user and new_pass:
+        if new_user in users_db:
+          st.error("Username already exists! Please choose another.")
+        else:
+          users_db[new_user] = {
+              "chamber_name": new_chamber,
+              "password": hash_password(new_pass),
+          }
+          save_users(users_db)
+          st.success("Registration successful! You can now log in.")
+      else:
+        st.error("Please fill in all registration details.")
+
+  st.stop()
+
+# ---------------------------------------------------------------------
+# USER-SPECIFIC DATA STORAGE INITIALIZATION
+# ---------------------------------------------------------------------
+current_user = st.session_state.authenticated_user
+chamber_name = users_db[current_user]["chamber_name"]
+
+CLIENT_FILE = f"clients_{current_user}.csv"
+INVOICE_FILE = f"invoices_{current_user}.csv"
+HISTORY_FILE = f"history_{current_user}.json"
+
+if "clients" not in st.session_state:
+  st.session_state.clients = []
+  if os.path.exists(CLIENT_FILE):
+    try:
+      with open(CLIENT_FILE, mode="r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+          st.session_state.clients.append(row)
+    except Exception:
+      pass
+
+if "invoices" not in st.session_state:
+  st.session_state.invoices = []
+  if os.path.exists(INVOICE_FILE):
+    try:
+      with open(INVOICE_FILE, mode="r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+          st.session_state.invoices.append(row)
+    except Exception:
+      pass
+
+if "history" not in st.session_state:
+  st.session_state.history = []
+  if os.path.exists(HISTORY_FILE):
+    try:
+      with open(HISTORY_FILE, mode="r", encoding="utf-8") as f:
+        st.session_state.history = json.load(f)
+    except Exception:
+      pass
+
+
+def save_clients_to_csv():
+  try:
+    with open(CLIENT_FILE, mode="w", newline="", encoding="utf-8") as file_obj:
+      fieldnames = ["name", "phone", "fir", "court", "date", "notes"]
+      writer = csv.DictWriter(file_obj, fieldnames=fieldnames)
+      writer.writeheader()
+      for c in st.session_state.clients:
+        writer.writerow(c)
+  except Exception:
+    pass
+
+
+def save_history_to_json():
+  try:
+    with open(HISTORY_FILE, mode="w", encoding="utf-8") as f:
+      json.dump(st.session_state.history, f, ensure_ascii=False, indent=4)
+  except Exception:
+    pass
+
+
+def save_invoices_to_csv():
+  try:
+    with open(INVOICE_FILE, mode="w", newline="", encoding="utf-8") as file_obj:
+      fieldnames = ["client_name", "case_ref", "fee_amount", "status", "date"]
+      writer = csv.DictWriter(file_obj, fieldnames=fieldnames)
+      writer.writeheader()
+      for inv in st.session_state.invoices:
+        writer.writerow(inv)
+  except Exception:
+    pass
+
+
+# ---------------------------------------------------------------------
+# HEADER & SIDEBAR: LOGOUT & NAVIGATION
+# ---------------------------------------------------------------------
+st.sidebar.markdown(f"### 🏛️ **{chamber_name}**")
+st.sidebar.caption(f"Logged in as: `{current_user}`")
+
+if st.sidebar.button("🚪 Logout Chamber"):
+  st.session_state.authenticated_user = None
+  st.session_state.clients = []
+  st.session_state.invoices = []
+  st.session_state.history = []
+  for key in list(st.session_state.keys()):
+    del st.session_state[key]
+  st.rerun()
+
+st.sidebar.markdown("---")
+st.sidebar.title("🔐 Chamber API Settings")
+api_key = st.sidebar.text_input(
+    "Enter Anthropic API Key:", type="password", placeholder="sk-ant-usr-..."
+)
+workspace_id = st.sidebar.text_input(
+    "Enter Workspace ID:", placeholder="Maslan: wksp_..."
+)
+
+st.sidebar.markdown("---")
+st.sidebar.title("🌐 Select Language")
+language = st.sidebar.radio(
+    "Drafting Language:",
+    ["English (Legal Standard)", "Urdu (قانونی اردو)", "Roman Urdu"],
+)
+
+st.sidebar.markdown("---")
+st.sidebar.title("📂 Navigation Portal")
+app_mode = st.sidebar.selectbox(
+    "Select Module:",
+    [
+        "📅 Hearing Reminders & Notifications (Priority)",
+        "📜 Constitution of Pakistan Portal",
+        "📜 Supreme/High Court Judgments & Act Search (CPC, PPC, QSO, CrPC)",
+        "🔍 FIR Summarizer & Analysis",
+        "🎨 Custom Practice Template Adapter",
+        "🏛️ Criminal Law Portal",
+        "📜 Civil Law Portal",
+        "💍 Family Law Portal",
+        "💻 Cyber Crime Portal",
+        "📜 Constitutional / Writ Portal",
+        "🌾 Revenue & Property Law Portal",
+        "👥 Client CRM & Records",
+        "💰 Fee & Invoice Manager",
+        "📜 Search & Draft History",
+    ],
+)
+
+st.title(f"⚖️ {chamber_name.upper()} - LEGAL PORTAL")
+st.caption("Chamber Management & AI Practice System")
+st.markdown("---")
+
+client = None
+if api_key:
+  try:
+    if workspace_id:
+      client = anthropic.Anthropic(
+          api_key=api_key, default_headers={"anthropic-workspace-id": workspace_id}
+      )
+    else:
+      client = anthropic.Anthropic(api_key=api_key)
+  except Exception as e:
+    st.sidebar.error(f"Invalid API Key format: {e}")
+
+if not api_key:
+  st.warning("⚠️ Bar Portal ko active karne ke liye sidebar mein apni Anthropic API Key darj karein.")
+  st.stop()
+
+
+# ---------------------------------------------------------------------
+# HELPER FUNCTIONS
+# ---------------------------------------------------------------------
+def print_page_button():
+  st.markdown(
+      """
+        <button onclick="window.print()" style="background-color: #2d6a4f; color: white; padding: 10px 20px; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; margin-bottom: 15px;">
+            🖨️ Print This Page / Result
+        </button>
+        """,
+      unsafe_allow_html=True,
+  )
+
+
+def extract_text_from_docx(file):
+  if file is None:
+    return ""
+  doc = docx.Document(file)
+  full_text = []
+  for para in doc.paragraphs:
+    if para.text.strip():
+      full_text.append(para.text.strip())
+  return "\n".join(full_text)
+
+
+def create_word_document(text_content, is_urdu=False):
+  doc = docx.Document()
+  for line in text_content.split("\n"):
+    line_str = line.strip()
+    if not line_str:
+      continue
+    p = doc.add_paragraph()
+    if is_urdu:
+      p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+      pPr = p._p.get_or_add_pPr()
+      pPr.append(parse_xml(f'<w:bdr {nsdecls("w")}/>'))
+      pPr.append(parse_xml(f'<w:bidi {nsdecls("w")}/>'))
+    else:
+      p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+    parts = re.split(r"(\*\*.*?\*\*)", line_str)
+    for part in parts:
+      if not part:
+        continue
+      run = p.add_run()
+      if part.startswith("**") and part.endswith("**"):
+        run.text = part[2:-2]
+        run.bold = True
+      else:
+        run.text = part.replace("###", "").replace("##", "")
+
+      if is_urdu:
+        run.font.name = "Jameel Noori Nastaliq"
+        run.font.size = docx.shared.Pt(14)
+        rPr = run._r.get_or_add_rPr()
+        rPr.append(
+            parse_xml(
+                f'<w:rFonts {nsdecls("w")} w:cs="Jameel Noori Nastaliq"'
+                ' w:ascii="Calibri" w:hAnsi="Calibri"/>'
+            )
+        )
+      else:
+        run.font.name = "Calibri"
+        run.font.size = docx.shared.Pt(12)
+
+  bio = BytesIO()
+  doc.save(bio)
+  bio.seek(0)
+  return bio
+
+
+def display_output(content, lang):
+  print_page_button()
+  if "Urdu" in lang:
+    st.markdown(
+        '<div style="text-align: right; direction: rtl; font-family: Noto'
+        " Nastaliq Urdu, Arial; font-size: 18px; line-height: 1.8; background:"
+        " #ffffff; padding: 20px; border-radius: 6px; border: 1px solid"
+        f' #cccccc; color: #000000;">{content}</div>',
+        unsafe_allow_html=True,
+    )
+  else:
+    st.markdown(
+        '<div style="background: #ffffff; padding: 20px; border-radius: 6px;'
+        ' border: 1px solid #cccccc; color:'
+        f' #000000;">{content}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def validate_and_process_image(uploaded_img):
+  if uploaded_img is None:
+    return True, None
+  size_in_kb = uploaded_img.size / 1024
+  if size_in_kb > 500:
+    st.info(
+        f"ℹ️ Image size {size_in_kb:.1f}KB hai (500KB se ziada). System khud isko compress kar raha hai..."
+    )
+    return True, compress_image_to_under_500kb(uploaded_img)
+  else:
+    return True, uploaded_img
+
+
+def compress_image_to_under_500kb(image_file):
+  img = Image.open(image_file)
+  if img.mode in ("RGBA", "P"):
+    img = img.convert("RGB")
+  max_dim = 1280
+  if max(img.size) > max_dim:
+    img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+  output_io = BytesIO()
+  quality = 85
+  while True:
+    output_io.seek(0)
+    output_io.truncate(0)
+    img.save(output_io, format="JPEG", quality=quality)
+    if output_io.tell() <= 500 * 1024 or quality <= 20:
+      break
+    quality -= 10
+  output_io.seek(0)
+  return output_io
+
+
+def encode_image(image_file):
+  compressed_io = compress_image_to_under_500kb(image_file)
+  return base64.b64encode(compressed_io.getvalue()).decode("utf-8")
+
+
+def get_language_instruction(lang):
+  if "Urdu (قانونی اردو)" in lang:
+    return """IMPORTANT: Write the ENTIRE output strictly in High Court & District Court Standard Pakistani Legal Urdu (مستند و باضابطہ قانونی اردو). 
+Follow authentic Pakistani advocate drafting terms (e.g. بعدالت جناب, سائل/درخواست گزار, مسئول عنہ, عرض ہے کہ, استدعا ہے کہ, حلف نامہ)."""
+  elif "Roman Urdu" in lang:
+    return "IMPORTANT: Write the ENTIRE output strictly in Roman Urdu (Pakistani Urdu written in English script)."
+  else:
+    return "IMPORTANT: Write the ENTIRE output strictly in Standard Legal English as used in High Courts and Supreme Court of Pakistan."
+
+
+lang_instruction = get_language_instruction(language)
+SYSTEM_LEGAL_PROMPT = """
+You are an expert Senior Advocate and Legal Drafter practicing in the High Courts and Supreme Court of Pakistan.
+You excel at researching Pakistani laws (Constitution of Pakistan, CPC, PPC, CrPC, QSO, Revenue Laws), finding Supreme Court and High Court precedents/judgments, and drafting formal legal documents.
+"""
+
+
+def generate_ai_response(prompt_text, image_file=None):
+  messages = []
+  if image_file is not None:
+    base64_image = encode_image(image_file)
+    messages.append({
+        "role": "user",
+        "content": [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": base64_image,
+                },
+            },
+            {"type": "text", "text": prompt_text},
+        ],
+    })
+  else:
+    messages.append({"role": "user", "content": prompt_text})
+
+  res = client.messages.create(
+      model="claude-sonnet-4-6",
+      max_tokens=3500,
+      system=SYSTEM_LEGAL_PROMPT,
+      messages=messages,
+  )
+  return res.content[0].text
+
+
+def save_and_display_result(prompt_text, category_label, result_text, lang):
+  st.session_state.history.append({
+      "time": datetime.now().strftime("%d-%m-%Y %H:%M"),
+      "type": category_label,
+      "query": prompt_text[:120] + "...",
+      "result": result_text,
+      "lang": lang,
+  })
+  save_history_to_json()
+  display_output(result_text, lang)
+  st.download_button(
+      "📥 Download as Word (.docx)",
+      create_word_document(result_text, "Urdu" in lang),
+      f"Legal_Draft_{datetime.now().strftime('%d%m%Y_%H%M')}.docx",
+  )
+
+
+def build_template_context(file_upload):
+  extracted_style = ""
+  if file_upload is not None:
+    try:
+      extracted_style = extract_text_from_docx(file_upload)
+    except Exception:
+      pass
+  if extracted_style:
+    return f"""
+CRITICAL INSTRUCTION FOR STYLE & VOCABULARY MATCHING:
+Analyze the uploaded reference template below and strictly adopt its phrasing, vocabulary, and structural style:
+--- UPLOADED TEMPLATE START ---
+{extracted_style}
+--- UPLOADED TEMPLATE END ---
+"""
+  return "Follow standard Pakistani court drafting style and terminology."
+
+
+# ---------------------------------------------------------------------
+# MODULE 0: HEARING REMINDERS
+# ---------------------------------------------------------------------
+if app_mode == "📅 Hearing Reminders & Notifications (Priority)":
+  st.subheader("📅 Priority Permanent Hearing Dates & Chamber WhatsApp Reminders")
+  print_page_button()
+
+  if not st.session_state.clients:
+    st.info("Abhi tak koi client add nahi kiya gaya.")
+  else:
+    today_str = str(date.today())
+    st.markdown("### 📌 All Upcoming & Saved Hearings")
+    for idx, cl in enumerate(st.session_state.clients):
+      h_date = cl.get("date", "")
+      is_today = h_date == today_str
+      b_color = "border-left: 5px solid #d9534f;" if is_today else "border-left: 5px solid #5cb85c;"
+
+      st.markdown(
+          f"""
+            <div style="padding: 15px; margin-bottom: 12px; background-color: #f9f9f9; {b_color} border-radius: 4px; border: 1px solid #e3e3e3;">
+                <b>Client:</b> {cl['name']} &nbsp;|&nbsp; <b>FIR / Ref:</b> {cl['fir']} <br>
+                <b>Court:</b> {cl.get('court', 'N/A')} &nbsp;|&nbsp; <b>Next Hearing Date:</b> <code>{h_date}</code> {'<span style="color:red; font-weight:bold;">(TODAY!)</span>' if is_today else ''}<br>
+                <b>Remarks:</b> {cl.get('notes', 'No notes')}
+            </div>
+            """,
+          unsafe_allow_html=True,
+      )
+
+      wa_phone = cl.get("phone", "").strip()
+      wa_msg = f"Mohtaram {cl['name']}, aapke case ({cl['fir']}) ki meharbani adalat mein waqt par tashrif layein. - {chamber_name}"
+      encoded_msg = urllib.parse.quote(wa_msg)
+      wa_url = f"https://wa.me/{wa_phone}?text={encoded_msg}"
+
+      if wa_phone:
+        st.markdown(f"💬 [📱 Send WhatsApp Reminder for {cl['name']}]({wa_url})", unsafe_allow_html=True)
+
+      st.markdown("---")
+
+# ---------------------------------------------------------------------
+# MODULE 1: CONSTITUTION OF PAKISTAN PORTAL
+# ---------------------------------------------------------------------
+elif app_mode == "📜 Constitution of Pakistan Portal":
+  st.subheader("📜 Constitution of Pakistan, 1973 - Research & Guidance Portal")
+  col_con1, col_con2 = st.columns(2)
+  with col_con1:
+    const_article = st.text_input("Enter Article Number or Subject:", "Article 199")
+  with col_con2:
+    const_focus = st.selectbox(
+        "Focus Area:",
+        [
+            "General Interpretation & Bare Act Text Details",
+            "Supreme Court & High Court Case Law / Judgments",
+            "Infringement of Fundamental Rights & Remedies",
+            "Constitutional Petition / Writ Maintainability",
+        ],
+    )
+
+  const_query = st.text_area("Enter Specific Constitutional Question or Case Details:", height=150)
+
+  if st.button("🔍 Search Constitutional Law & Judgments", type="primary"):
+    with st.spinner("Researching Constitution of Pakistan with Claude..."):
+      prompt = f"""
+{lang_instruction}
+Conduct expert constitutional research based on the Constitution of the Islamic Republic of Pakistan, 1973.
+- Target Article / Provision: {const_article}
+- Focus Area: {const_focus}
+- Specific Query / Case Context: {const_query}
+"""
+      res = generate_ai_response(prompt)
+      save_and_display_result(prompt, "Constitution of Pakistan Portal", res, language)
+
+# ---------------------------------------------------------------------
+# MODULE 2: SUPREME/HIGH COURT JUDGMENTS & ACT SEARCH
+# ---------------------------------------------------------------------
+elif app_mode == "📜 Supreme/High Court Judgments & Act Search (CPC, PPC, QSO, CrPC)":
+  st.subheader("📜 Supreme & High Court Case Law & Act Research")
+  act_choice = st.selectbox(
+      "Select Main Legal Code / Act:",
+      [
+          "CrPC (Code of Criminal Procedure, 1898)",
+          "PPC (Pakistan Penal Code, 1860)",
+          "CPC (Code of Civil Procedure, 1908)",
+          "QSO (Qanun-e-Shahadat Order, 1984)",
+          "Other Special Act / Constitution / Revenue Law",
+      ],
+  )
+  col_s1, col_s2 = st.columns(2)
+  with col_s1:
+    section_query = st.text_input("Section / Provision No.:", "Section 497 CrPC")
+  with col_s2:
+    jurisdiction_choice = st.selectbox(
+        "Court Precedents Required:",
+        ["Supreme Court of Pakistan & High Courts", "Lahore High Court Lahore", "Sindh High Court Karachi"],
+    )
+
+  research_query = st.text_area("Enter Legal Question, Dispute Details or Point to Research:", height=150)
+
+  if st.button("🔍 Search Case Law & Judgments", type="primary"):
+    with st.spinner("Searching Court precedents..."):
+      prompt = f"""
+{lang_instruction}
+Conduct legal research on Pakistani law:
+- Selected Act: {act_choice}
+- Provision: {section_query}
+- Jurisdiction: {jurisdiction_choice}
+- Facts/Query: {research_query}
+"""
+      res = generate_ai_response(prompt)
+      save_and_display_result(prompt, "Case Law & Act Search", res, language)
+
+# ---------------------------------------------------------------------
+# MODULE 3: FIR SUMMARIZER
+# ---------------------------------------------------------------------
+elif app_mode == "🔍 FIR Summarizer & Analysis":
+  st.subheader("🔍 FIR Summarizer & Case Analysis Portal")
+  fir_text_input = st.text_area("Paste FIR Text Here:", height=200)
+  fir_img = st.file_uploader("Upload FIR Snapshot / Image:", type=["jpg", "png", "jpeg"])
+  is_v_fir, proc_fir_img = validate_and_process_image(fir_img)
+
+  if st.button("📊 Summarize FIR & Analyze Case", type="primary"):
+    if not is_v_fir:
+      st.error("Image upload error!")
+    else:
+      with st.spinner("Summarizing FIR..."):
+        prompt = f"""
+{lang_instruction}
+Analyze and summarize the provided First Information Report (FIR) for a Pakistani advocate.
+FIR TEXT:
+{fir_text_input}
+"""
+        res = generate_ai_response(prompt, image_file=proc_fir_img)
+        save_and_display_result(prompt, "FIR Summarizer", res, language)
+
+# ---------------------------------------------------------------------
+# MODULE 4: CUSTOM PRACTICE TEMPLATE ADAPTER
+# ---------------------------------------------------------------------
+elif app_mode == "🎨 Custom Practice Template Adapter":
+  st.subheader("🎨 Custom Chamber Template Adapter")
+  uploaded_template = st.file_uploader("Upload Sample Chamber Template (.docx)", type=["docx"])
+  col_t1, col_t2 = st.columns(2)
+  with col_t1:
+    case_type = st.text_input("Application / Petition Title:", "Bail Application / Plaint / Writ")
+    custom_court = st.text_input("Target Court Forum:", "In the Court of Sessions Judge, Lahore")
+  with col_t2:
+    custom_parties = st.text_input("Parties Title:", "Muhammad Ali VS The State")
+    custom_sections = st.text_input("Law / Sections / Offence:", "Section 489-F / 420 PPC")
+
+  new_facts = st.text_area("Enter New Case Facts & Specific Grounds for Drafting:", height=150)
+
+  if st.button("🤖 Generate Customized Legal Draft", type="primary"):
+    with st.spinner("Generating Customized Draft..."):
+      temp_ctx = build_template_context(uploaded_template)
+      full_prompt = f"""
+{lang_instruction}
+{temp_ctx}
+Document Type: {case_type}
+Court Forum: {custom_court}
+Parties: {custom_parties}
+Sections/Law: {custom_sections}
+Facts/Grounds: {new_facts}
+"""
+      res = generate_ai_response(full_prompt)
+      save_and_display_result(full_prompt, "Custom Template Generator", res, language)
+
+# ---------------------------------------------------------------------
+# MODULE 5: CRIMINAL LAW PORTAL
+# ---------------------------------------------------------------------
+elif app_mode == "🏛️ Criminal Law Portal":
+  st.subheader("⚖️ Criminal Law Practice Portal")
+  criminal_module = st.selectbox(
+      "Choose Criminal Module:",
+      [
+          "Pre-Arrest Bail Petition (Sec 498 CrPC)",
+          "Post-Arrest Bail Petition (Sec 497 CrPC)",
+          "Application u/s 22-A / 22-B CrPC",
+          "Superdari Application",
+          "Specialized Drug Case (CNSA 9-C) Bail",
+          "Criminal Revision & Appeal",
+      ],
+  )
+  crim_file = st.file_uploader("Upload Template (.docx) [Optional]:", type=["docx"], key="crim_up")
+  col1, col2 = st.columns(2)
+  with col1:
+    c_court = st.text_input("Court Forum:", "Court of Sessions Judge, Lahore")
+    c_parties = st.text_input("Parties:", "Muhammad Akram VS The State")
+  with col2:
+    c_ps = st.text_input("Police Station:", "PS Model Town, Lahore")
+    c_sec = st.text_input("FIR No & Sections:", "FIR No. 120/2026 u/s 392/34 PPC")
+
+  crim_img = st.file_uploader("Upload Image/FIR Snapshot [Optional]:", type=["jpg", "png", "jpeg"], key="cimg")
+  is_v, proc_img = validate_and_process_image(crim_img)
+  crim_facts = st.text_area("Enter Case Details & Specific Grounds:", height=150)
+
+  if st.button("🖊️ Generate Criminal Draft", type="primary"):
+    if not is_v:
+      st.error("Image processing error!")
+    else:
+      with st.spinner("Drafting criminal document..."):
+        t_ctx = build_template_context(crim_file)
+        prompt = f"""
+{lang_instruction}
+{t_ctx}
+Generate Criminal Document for Module: {criminal_module}
+- Court: {c_court}
+- Parties: {c_parties}
+- Police Station: {c_ps}
+- FIR/Sections: {c_sec}
+- Case Grounds/Facts: {crim_facts}
+"""
+        res = generate_ai_response(prompt, image_file=proc_img)
+        save_and_display_result(prompt, f"Criminal Law ({criminal_module})", res, language)
+
+# ---------------------------------------------------------------------
+# MODULE 6: CIVIL LAW PORTAL
+# ---------------------------------------------------------------------
+elif app_mode == "📜 Civil Law Portal":
+  st.subheader("📜 Civil Law Practice Portal")
+  civil_module = st.selectbox(
+      "Choose Civil Module:",
+      [
+          "Plaint (Daawa) - Declaration & Permanent Injunction",
+          "Plaint (Daawa) - Specific Performance of Contract",
+          "Written Statement (Jawab-e-Dawa)",
+          "Temporary Injunction Application (Order 39 Rule 1 & 2 CPC)",
+          "Execution Petition (Order 21 CPC)",
+      ],
+  )
+  civ_file = st.file_uploader("Upload Template (.docx) [Optional]:", type=["docx"], key="civ_up")
+  col1, col2 = st.columns(2)
+  with col1:
+    cv_court = st.text_input("Court Forum:", "Court of Senior Civil Judge, Lahore")
+    cv_parties = st.text_input("Parties:", "Tariq Mahmood VS Province of Punjab")
+  with col2:
+    cv_area = st.text_input("Area / Revenue Station:", "Mauza Kot Lakhpat, Lahore")
+    cv_act = st.text_input("Law / Act Provisions:", "Specific Relief Act (I of 1877)")
+
+  civ_img = st.file_uploader("Upload Document Snapshot [Optional]:", type=["jpg", "png", "jpeg"], key="cvimg")
+  is_cv, proc_cv = validate_and_process_image(civ_img)
+  civ_facts = st.text_area("Enter Civil Case Particulars & Property Details:", height=150)
+
+  if st.button("🖊️ Generate Civil Draft", type="primary"):
+    if not is_cv:
+      st.error("Image processing error!")
+    else:
+      with st.spinner("Drafting civil document..."):
+        t_ctx = build_template_context(civ_file)
+        prompt = f"""
+{lang_instruction}
+{t_ctx}
+Generate Civil Document for Module: {civil_module}
+- Court: {cv_court}
+- Parties: {cv_parties}
+- Area/Station: {cv_area}
+- Provision: {cv_act}
+- Case Details/Facts: {civ_facts}
+"""
+        res = generate_ai_response(prompt, image_file=proc_cv)
+        save_and_display_result(prompt, f"Civil Law ({civil_module})", res, language)
+
+# ---------------------------------------------------------------------
+# MODULE 7: FAMILY LAW PORTAL
+# ---------------------------------------------------------------------
+elif app_mode == "💍 Family Law Portal":
+  st.subheader("💍 Family Law Practice Portal")
+  fam_module = st.selectbox(
+      "Choose Family Module:",
+      [
+          "Suit for Dissolution of Marriage (Khula)",
+          "Suit for Recovery of Maintenance Allowance (Naan-Nafqa)",
+          "Suit for Recovery of Dower & Dowry Articles",
+          "Guardian & Wards Petition (Custody of Minors)",
+          "Written Statement in Family Suit",
+      ],
+  )
+  fam_file = st.file_uploader("Upload Custom Template (.docx) [Optional]:", type=["docx"], key="fam_up")
+  col1, col2 = st.columns(2)
+  with col1:
+    f_court = st.text_input("Court Forum:", "Court of Judge Family Court, Lahore")
+    f_parties = st.text_input("Parties Title:", "Mst. Ayesha Bibi VS Muhammad Bilal")
+  with col2:
+    f_loc = st.text_input("Locality / Station:", "PS Gulshan-e-Ravi, Lahore")
+    f_act = st.text_input("Law Provisions:", "West Pakistan Family Courts Act, 1964")
+
+  fam_img = st.file_uploader("Upload Nikah Nama Snapshot [Optional]:", type=["jpg", "png", "jpeg"], key="fimg")
+  is_fm, proc_fm = validate_and_process_image(fam_img)
+  fam_facts = st.text_area("Enter Marriage Details & Specific Claims:", height=150)
+
+  if st.button("🖊️ Generate Family Draft", type="primary"):
+    if not is_fm:
+      st.error("Image processing error!")
+    else:
+      with st.spinner("Drafting family document..."):
+        t_ctx = build_template_context(fam_file)
+        prompt = f"""
+{lang_instruction}
+{t_ctx}
+Generate Family Document for Module: {fam_module}
+- Court: {f_court}
+- Parties: {f_parties}
+- Locality: {f_loc}
+- Provisions: {f_act}
+- Particulars/Facts: {fam_facts}
+"""
+        res = generate_ai_response(prompt, image_file=proc_fm)
+        save_and_display_result(prompt, f"Family Law ({fam_module})", res, language)
+
+# ---------------------------------------------------------------------
+# MODULE 8: CYBER CRIME PORTAL
+# ---------------------------------------------------------------------
+elif app_mode == "💻 Cyber Crime Portal":
+  st.subheader("💻 Cyber Crime & FIA Defense Portal")
+  cyb_module = st.selectbox(
+      "Choose Cyber Module:",
+      [
+          "Pre-Arrest Bail Petition in FIA Cyber Crime Circle",
+          "Post-Arrest Bail Petition in Cyber Crime Case",
+          "Written Reply to FIA Inquiry Notice",
+          "Petition for Quashing of FIA Inquiry / FIR",
+      ],
+  )
+  cyb_file = st.file_uploader("Upload Custom Template (.docx) [Optional]:", type=["docx"], key="cyb_up")
+  col1, col2 = st.columns(2)
+  with col1:
+    cy_court = st.text_input("Court Forum:", "Special Judge Central / Sessions Judge, Lahore")
+    cy_parties = st.text_input("Parties:", "Hamza Ali VS FIA through Director Cyber Crime")
+  with col2:
+    cy_circle = st.text_input("FIA Circle:", "FIA Cyber Crime Circle, Lahore")
+    cy_sec = st.text_input("PECA Sections / Inquiry No:", "Inquiry No. 112/2026 u/s 20, 21 PECA")
+
+  cyb_img = st.file_uploader("Upload FIA Notice Snapshot [Optional]:", type=["jpg", "png", "jpeg"], key="cyimg")
+  is_cy, proc_cy = validate_and_process_image(cyb_img)
+  cyb_facts = st.text_area("Case Allegations & Technical Defense Grounds:", height=150)
+
+  if st.button("🖊️ Generate Cyber Crime Draft", type="primary"):
+    if not is_cy:
+      st.error("Image processing error!")
+    else:
+      with st.spinner("Drafting cyber crime document..."):
+        t_ctx = build_template_context(cyb_file)
+        prompt = f"""
+{lang_instruction}
+{t_ctx}
+Generate Cyber Crime Document under PECA for Module: {cyb_module}
+- Court: {cy_court}
+- Parties: {cy_parties}
+- FIA Circle: {cy_circle}
+- PECA Provisions: {cy_sec}
+- Case Details/Grounds: {cyb_facts}
+"""
+        res = generate_ai_response(prompt, image_file=proc_cy)
+        save_and_display_result(prompt, f"Cyber Law ({cyb_module})", res, language)
+
+# ---------------------------------------------------------------------
+# MODULE 9: CONSTITUTIONAL / WRIT PORTAL
+# ---------------------------------------------------------------------
+elif app_mode == "📜 Constitutional / Writ Portal":
+  st.subheader("📜 Constitutional / Writ Petition Portal (Article 199)")
+  writ_module = st.selectbox(
+      "Choose Constitutional Module:",
+      [
+          "Writ of Mandamus (Direction to Public Authority)",
+          "Writ of Certiorari (Quashing Order/Notification)",
+          "Writ of Habeas Corpus (Production of Detenu)",
+          "Writ of Prohibition / Quo-Warranto",
+      ],
+  )
+  writ_file = st.file_uploader("Upload Custom Writ Template (.docx) [Optional]:", type=["docx"], key="writ_up")
+  col1, col2 = st.columns(2)
+  with col1:
+    w_court = st.text_input("Court Forum:", "Lahore High Court, Lahore")
+    w_parties = st.text_input("Parties Title:", "Chaudhry Ahmad Ali VS Province of Punjab")
+  with col2:
+    w_dept = st.text_input("Respondent Department:", "Local Government Department, Punjab")
+    w_const = st.text_input("Constitutional Provision:", "Article 199 of the Constitution of Pakistan, 1973")
+
+  writ_img = st.file_uploader("Upload Impugned Order Snapshot [Optional]:", type=["jpg", "png", "jpeg"], key="wimg")
+  is_w, proc_w = validate_and_process_image(writ_img)
+  writ_facts = st.text_area("Grievance Details & Violation of Fundamental Rights:", height=150)
+
+  if st.button("🖊️ Generate Constitutional Writ Draft", type="primary"):
+    if not is_w:
+      st.error("Image processing error!")
+    else:
+      with st.spinner("Drafting Constitutional Petition..."):
+        t_ctx = build_template_context(writ_file)
+        prompt = f"""
+{lang_instruction}
+{t_ctx}
+Generate Constitutional Writ Petition (Article 199) for Module: {writ_module}
+- Forum: {w_court}
+- Parties: {w_parties}
+- Department: {w_dept}
+- Provision: {w_const}
+- Grievance Details: {writ_facts}
+"""
+        res = generate_ai_response(prompt, image_file=proc_w)
+        save_and_display_result(prompt, f"Constitutional Writ ({writ_module})", res, language)
+
+# ---------------------------------------------------------------------
+# MODULE 10: REVENUE & PROPERTY LAW PORTAL
+# ---------------------------------------------------------------------
+elif app_mode == "🌾 Revenue & Property Law Portal":
+  st.subheader("🌾 Revenue & Property Law Practice Modules")
+  rev_module = st.selectbox(
+      "Choose Revenue Module:",
+      [
+          "Appeal Before Commissioner / EDO",
+          "Revision Petition Before Board of Revenue (BoR)",
+          "Partition Suit (Takseem) before Revenue Officer",
+          "Mutation Challenge / Cancellation Application",
+          "Stay Application in Revenue Proceedings",
+      ],
+  )
+  rev_file = st.file_uploader("Upload Custom Template (.docx) [Optional]:", type=["docx"], key="rev_up")
+  col1, col2 = st.columns(2)
+  with col1:
+    r_court = st.text_input("Revenue Court Forum:", "Court of District Collector, Lahore")
+    r_parties = st.text_input("Parties Title:", "Muhammad Boota VS District Collector Kasur")
+  with col2:
+    r_mauza = st.text_input("Mauza & Tehsil:", "Mauza Raiwind, Tehsil Raiwind, Lahore")
+    r_law = st.text_input("Revenue Law:", "Punjab Land Revenue Act, 1967")
+
+  rev_img = st.file_uploader("Upload Fard / Revenue Snapshot [Optional]:", type=["jpg", "png", "jpeg"], key="rimg")
+  is_r, proc_r = validate_and_process_image(rev_img)
+  rev_facts = st.text_area("Revenue Details, Khata/Khatoni Nos & Dispute Particulars:", height=150)
+
+  if st.button("🖊️ Generate Revenue Legal Draft", type="primary"):
+    if not is_r:
+      st.error("Image processing error!")
+    else:
+      with st.spinner("Drafting Revenue Document..."):
+        t_ctx = build_template_context(rev_file)
+        prompt = f"""
+{lang_instruction}
+{t_ctx}
+Generate Revenue Legal Document for Module: {rev_module}
+- Forum: {r_court}
+- Parties: {r_parties}
+- Mauza/Tehsil: {r_mauza}
+- Law: {r_law}
+- Dispute Details: {rev_facts}
+"""
+        res = generate_ai_response(prompt, image_file=proc_r)
+        save_and_display_result(prompt, f"Revenue Law ({rev_module})", res, language)
+
+# ---------------------------------------------------------------------
+# MODULE 11: CLIENT CRM & RECORDS
+# ---------------------------------------------------------------------
+elif app_mode == "👥 Client CRM & Records":
+  st.subheader("👥 Chamber Client CRM & Permanent Record System")
+
+  with st.form("client_form"):
+    col_c1, col_c2 = st.columns(2)
+    with col_c1:
+      c_name = st.text_input("Client Full Name:")
+      c_phone = st.text_input("WhatsApp Phone Number (e.g. 923001234567):", placeholder="923...")
+      c_fir = st.text_input("Case Ref / FIR / Suit No:")
+    with col_c2:
+      c_court_name = st.text_input("Court Name / Bench:", "Sessions Court Lahore")
+      c_next_date = st.date_input("Next Hearing Date:")
+      c_notes = st.text_area("Case Notes / Remarks:")
+
+    submitted_client = st.form_submit_button("💾 Save Client Record")
+    if submitted_client:
+      if c_name and c_fir:
+        new_c = {
+            "name": c_name,
+            "phone": c_phone,
+            "fir": c_fir,
+            "court": c_court_name,
+            "date": str(c_next_date),
+            "notes": c_notes,
+        }
+        st.session_state.clients.append(new_c)
+        save_clients_to_csv()
+        st.success(f"✅ Client '{c_name}' ka record save ho gaya!")
+      else:
+        st.error("Baraye meharbani Client Name aur FIR/Suit No lazmi darj karein.")
+
+  st.markdown("---")
+  st.subheader("📋 Saved Clients Directory")
+  if not st.session_state.clients:
+    st.info("Abhi tak koi client record mojood nahi hai.")
+  else:
+    for i, cl_item in enumerate(st.session_state.clients):
+      st.markdown(
+          f"""
+            <b>{i+1}. Name:</b> {cl_item['name']} &nbsp;|&nbsp; <b>Phone:</b> {cl_item.get('phone','N/A')} <br>
+            <b>Case/FIR:</b> {cl_item['fir']} &nbsp;|&nbsp; <b>Court:</b> {cl_item.get('court','N/A')} &nbsp;|&nbsp; <b>Next Date:</b> <code>{cl_item.get('date','N/A')}</code><br>
+            <b>Notes:</b> {cl_item.get('notes','N/A')}
+            """,
+          unsafe_allow_html=True,
+      )
+      if st.button(f"🗑️ Delete Client {i+1}", key=f"del_client_{i}"):
+        st.session_state.clients.pop(i)
+        save_clients_to_csv()
+        st.rerun()
+      st.markdown("---")
+
+# ---------------------------------------------------------------------
+# MODULE 12: FEE & INVOICE MANAGER
+# ---------------------------------------------------------------------
+elif app_mode == "💰 Fee & Invoice Manager":
+  st.subheader("💰 Professional Advocate Fee & Invoice Manager")
+
+  with st.form("invoice_form"):
+    col_i1, col_i2 = st.columns(2)
+    with col_i1:
+      inv_client = st.text_input("Client Name:")
+      inv_case = st.text_input("Case Reference / Title:")
+    with col_i2:
+      inv_amount = st.number_input("Fee Amount (PKR):", min_value=0.0, step=1000.0)
+      inv_status = st.selectbox("Payment Status:", ["Pending", "Paid / Received", "Partially Paid"])
+
+    submitted_inv = st.form_submit_button("💾 Generate & Save Invoice")
+    if submitted_inv:
+      if inv_client:
+        new_inv = {
+            "client_name": inv_client,
+            "case_ref": inv_case,
+            "fee_amount": str(inv_amount),
+            "status": inv_status,
+            "date": str(date.today()),
+        }
+        st.session_state.invoices.append(new_inv)
+        save_invoices_to_csv()
+        st.success("✅ Invoice successfully saved!")
+      else:
+        st.error("Baraye meharbani Client Name darj karein.")
+
+  st.markdown("---")
+  st.subheader("📊 Invoices & Fee Records")
+  if not st.session_state.invoices:
+    st.info("No invoices recorded yet.")
+  else:
+    for idx, inv in enumerate(st.session_state.invoices):
+      st.markdown(
+          f"""
+            <b>Client:</b> {inv['client_name']} &nbsp;|&nbsp; <b>Case:</b> {inv['case_ref']} <br>
+            <b>Amount:</b> PKR {inv['fee_amount']} &nbsp;|&nbsp; <b>Status:</b> <b>{inv['status']}</b> &nbsp;|&nbsp; <b>Date:</b> {inv['date']}
+            """,
+          unsafe_allow_html=True,
+      )
+      if st.button(f"🗑️ Delete Invoice {idx+1}", key=f"del_inv_{idx}"):
+        st.session_state.invoices.pop(idx)
+        save_invoices_to_csv()
+        st.rerun()
+      st.markdown("---")
+
+# ---------------------------------------------------------------------
+# MODULE 13: SEARCH & DRAFT HISTORY
+# ---------------------------------------------------------------------
+elif app_mode == "📜 Search & Draft History":
+  st.subheader("📜 Chamber Search & Draft History Archive")
+  print_page_button()
+
+  if not st.session_state.history:
+    st.info("Abhi tak koi history record mojood nahi hai.")
+  else:
+    if st.button("🗑️ Clear All History"):
+      st.session_state.history = []
+      save_history_to_json()
+      st.rerun()
+
+    for i, h in enumerate(reversed(st.session_state.history)):
+      with st.expander(f"[{h.get('time', 'N/A')}] Module: {h.get('type', 'N/A')} - {h.get('query', '')[:60]}..."):
+        st.markdown(f"**Query / Prompt:** {h.get('query', '')}")
+        display_output(h.get("result", ""), h.get("lang", "English"))
+        st.download_button(
+            "📥 Download this Draft (.docx)",
+            create_word_document(h.get("result", ""), "Urdu" in h.get("lang", "")),
+            f"History_Draft_{i}.docx",
+            key=f"hist_dl_{i}",
+        )
+      st.markdown("---")
