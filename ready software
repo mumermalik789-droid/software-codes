@@ -144,21 +144,10 @@ def hash_password(password):
   return hashlib.sha256(password.encode()).hexdigest()
 
 if "authenticated_user" not in st.session_state:
-    # Check if user exists in query params to persist login across refresh
-    saved_user = st.query_params.get("user", None)
-    if saved_user and saved_user in users_db:
-        st.session_state.authenticated_user = saved_user
-    else:
-      st.session_state.authenticated_user = None
+  st.session_state.authenticated_user = None
 
-# Check if device token already exists in query parameters (persistent for that browser)
 if "device_token" not in st.session_state:
-    if "dev_id" in st.query_params:
-        st.session_state.device_token = st.query_params["dev_id"]
-    else:
-        new_token = str(uuid.uuid4())
-        st.session_state.device_token = new_token
-        st.query_params["dev_id"] = new_token
+  st.session_state.device_token = str(uuid.uuid4())
 
 users_db = load_users()
 
@@ -202,19 +191,15 @@ if st.session_state.authenticated_user is None:
             if len(user_data["active_devices"]) >= max_allowed_devices and not user_data.get("is_admin", False):
                 st.error(f"⚠️ **Device Limit Exceeded!** Aapke package `{user_data.get('package', '').upper()}` mein maximum {max_allowed_devices} devices allowed hain.")
             else:
-               user_data["active_devices"].append(current_token)
-save_users(users_db)
-st.session_state.authenticated_user = login_user
-st.query_params["user"] = login_user  # Refresh ke baad login yaad rakhne ke liye
-st.query_params["dev_id"] = current_token  # Device ID permanent rakhne ke liye
-st.success(f"Welcome, {user_data['chamber_name']}!")
-st.rerun()
-      else:
-       st.session_state.authenticated_user = login_user
-       st.query_params["user"] = login_user  # Refresh ke baad login yaad rakhne ke liye
-       st.query_params["dev_id"] = current_token  # Device ID permanent rakhne ke liye
-       st.success(f"Welcome, {user_data['chamber_name']}!")
-       st.rerun()
+                user_data["active_devices"].append(current_token)
+                save_users(users_db)
+                st.session_state.authenticated_user = login_user
+                st.success(f"Welcome, {user_data['chamber_name']}!")
+                st.rerun()
+        else:
+            st.session_state.authenticated_user = login_user
+            st.success(f"Welcome, {user_data['chamber_name']}!")
+            st.rerun()
       else:
         st.error("Invalid Username or Password!")
 
@@ -443,15 +428,10 @@ st.sidebar.markdown(
 if st.sidebar.button("🚪 Logout Chamber"):
   if current_user in users_db and "active_devices" in users_db[current_user]:
     if st.session_state.device_token in users_db[current_user]["active_devices"]:
-      users_db[current_user]["active_devices"].remove(
-          st.session_state.device_token
-      )
+      users_db[current_user]["active_devices"].remove(st.session_state.device_token)
       save_users(users_db)
-
+      
   st.session_state.authenticated_user = None
-  if "user" in st.query_params:
-    del st.query_params["user"]  # URL se session hata dein
-
   st.session_state.clients = []
   st.session_state.invoices = []
   st.session_state.history = []
