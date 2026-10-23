@@ -180,24 +180,26 @@ if st.session_state.authenticated_user is None:
             render_payment_and_contact_card(wa_msg)
             st.stop()
 
-        # Check Device Limits (Max 2 devices allowed)
+       # Check Device Limits (Premium: Max 3 devices, Basic/Standard: Max 2 devices)
         if "active_devices" not in user_data:
-          user_data["active_devices"] = []
-        
+            user_data["active_devices"] = []
+
         current_token = st.session_state.device_token
+        max_allowed_devices = 3 if user_data.get("package") == "premium" else 2
+
         if current_token not in user_data["active_devices"]:
-          if len(user_data["active_devices"]) >= 2 and not user_data.get("is_admin", False):
-            st.error("⚠️ **Device Limit Exceeded!** Yeh account pehle hi do mukhtalif devices par active hai.")
-          else:
-            user_data["active_devices"].append(current_token)
-            save_users(users_db)
+            if len(user_data["active_devices"]) >= max_allowed_devices and not user_data.get("is_admin", False):
+                st.error(f"⚠️ **Device Limit Exceeded!** Aapke package `{user_data.get('package', '').upper()}` mein maximum {max_allowed_devices} devices allowed hain.")
+            else:
+                user_data["active_devices"].append(current_token)
+                save_users(users_db)
+                st.session_state.authenticated_user = login_user
+                st.success(f"Welcome, {user_data['chamber_name']}!")
+                st.rerun()
+        else:
             st.session_state.authenticated_user = login_user
             st.success(f"Welcome, {user_data['chamber_name']}!")
             st.rerun()
-        else:
-          st.session_state.authenticated_user = login_user
-          st.success(f"Welcome, {user_data['chamber_name']}!")
-          st.rerun()
       else:
         st.error("Invalid Username or Password!")
 
@@ -706,70 +708,99 @@ Analyze the uploaded reference template below and strictly adopt its phrasing, v
   return "Follow standard Pakistani court drafting style and terminology."
 
 # ---------------------------------------------------------------------
-# 👑 ADMIN PANEL MODULE
+# ---------------------------------------------------------------------
+# 👑 ADMIN PANEL MODULE (WITH DEVICE TRACKING & DELETION)
 # ---------------------------------------------------------------------
 if app_mode == "👑 Admin Panel (Manage Subscriptions & Access)":
-  st.subheader(f"👑 Master Admin Panel ({ADMIN_NAME}) - Subscriptions & Access")
-  st.caption("Yahan se aap tamam registered chambers ki subscriptions, packages aur expiry dates manage kar sakte hain.")
+    st.subheader(f"👑 Master Admin Panel ({ADMIN_NAME}) - Subscriptions & Access")
+    st.caption("Yahan se aap tamam registered chambers ki subscriptions, expiry dates, aur active logged-in devices manage kar sakte hain.")
 
-  users_db = load_users()
+    users_db = load_users()
 
-  for uname, udata in users_db.items():
-    if uname == "admin":
-      continue
-    
-    with st.expander(f"🏛️ Chamber: {udata.get('chamber_name', uname)} (ID: `{uname}`)", expanded=False):
-      col_a1, col_a2, col_a3 = st.columns(3)
-      
-      with col_a1:
-        current_pkg = udata.get("package", "basic")
-        pkg_options = ["basic", "standard", "premium"]
-        selected_pkg = st.selectbox(f"Select Package ({uname}):", pkg_options, index=pkg_options.index(current_pkg) if current_pkg in pkg_options else 0, key=f"pkg_{uname}")
-      
-      with col_a2:
-        current_exp = udata.get("expiry_date", str(date.today()))
-        try:
-          default_date_obj = datetime.strptime(current_exp, "%Y-%m-%d").date()
-        except Exception:
-          default_date_obj = date.today()
+    for uname, udata in users_db.items():
+        if uname == "admin":
+            continue
         
-        new_exp_date = st.date_input(f"Expiry Date ({uname}):", value=default_date_obj, key=f"exp_{uname}")
-      
-      with col_a3:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button(f"➕ 1 Month ({uname})", key=f"btn_1m_{uname}"):
-          ext_date = datetime.now().date() + timedelta(days=30)
-          users_db[uname]["expiry_date"] = str(ext_date)
-          save_users(users_db)
-          st.success("Extended by 1 Month!")
-          st.rerun()
-          
-        if st.button(f"➕ 6 Months ({uname})", key=f"btn_6m_{uname}"):
-          ext_date = datetime.now().date() + timedelta(days=180)
-          users_db[uname]["expiry_date"] = str(ext_date)
-          save_users(users_db)
-          st.success("Extended by 6 Months!")
-          st.rerun()
+        with st.expander(f"🏛️ Chamber: {udata.get('chamber_name', uname)} (ID: `{uname}`)", expanded=False):
+            
+            # --- ACTIVE DEVICES MANAGEMENT ---
+            active_devs = udata.get("active_devices", [])
+            max_devs = 3 if udata.get("package") == "premium" else 2
+            
+            st.markdown(f"📱 **Active Logged-in Devices ({len(active_devs)} / {max_devs} Allowed):**")
+            if active_devs:
+                for idx, dev_id in enumerate(active_devs, 1):
+                    col_d1, col_d2 = st.columns([4, 1])
+                    with col_d1:
+                        st.code(f"Device {idx}: {dev_id}")
+                    with col_d2:
+                        if st.button("❌ Delete", key=f"del_dev_{uname}_{idx}"):
+                            users_db[uname]["active_devices"].remove(dev_id)
+                            save_users(users_db)
+                            st.success(f"Device {idx} remove kar di gayi!")
+                            st.rerun()
+            else:
+                st.info("ℹ️ Abhi koi device logged in nahi hai.")
+            
+            if active_devs and st.button(f"🔄 Clear / Logout All Devices for `{uname}`", key=f"clear_all_dev_{uname}"):
+                users_db[uname]["active_devices"] = []
+                save_users(users_db)
+                st.success(f"`{uname}` ki tamam logged-in devices clear kar di gayi hain!")
+                st.rerun()
 
-        if st.button(f"➕ 1 Year ({uname})", key=f"btn_1y_{uname}"):
-          ext_date = datetime.now().date() + timedelta(days=365)
-          users_db[uname]["expiry_date"] = str(ext_date)
-          save_users(users_db)
-          st.success("Extended by 1 Year!")
-          st.rerun()
+            st.markdown("---")
 
-      if st.button(f"💾 Save Changes for {uname}", key=f"save_{uname}"):
-        users_db[uname]["package"] = selected_pkg
-        users_db[uname]["expiry_date"] = str(new_exp_date)
-        save_users(users_db)
-        st.success(f"Successfully updated package to {selected_pkg.upper()} and expiry to {new_exp_date}!")
-        st.rerun()
-        
-      if st.button(f"🗑️ Delete Chamber {uname}", key=f"del_{uname}", type="secondary"):
-        del users_db[uname]
-        save_users(users_db)
-        st.success(f"Chamber {uname} deleted.")
-        st.rerun()
+            col_a1, col_a2, col_a3 = st.columns(3)
+            
+            with col_a1:
+                current_pkg = udata.get("package", "basic")
+                pkg_options = ["basic", "standard", "premium"]
+                selected_pkg = st.selectbox(f"Select Package ({uname}):", pkg_options, index=pkg_options.index(current_pkg) if current_pkg in pkg_options else 0, key=f"pkg_{uname}")
+            
+            with col_a2:
+                current_exp = udata.get("expiry_date", str(date.today()))
+                try:
+                    default_date_obj = datetime.strptime(current_exp, "%Y-%m-%d").date()
+                except Exception:
+                    default_date_obj = date.today()
+                
+                new_exp_date = st.date_input(f"Expiry Date ({uname}):", value=default_date_obj, key=f"exp_{uname}")
+            
+            with col_a3:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button(f"➕ 1 Month ({uname})", key=f"btn_1m_{uname}"):
+                    ext_date = datetime.now().date() + timedelta(days=30)
+                    users_db[uname]["expiry_date"] = str(ext_date)
+                    save_users(users_db)
+                    st.success("Extended by 1 Month!")
+                    st.rerun()
+                    
+                if st.button(f"➕ 6 Months ({uname})", key=f"btn_6m_{uname}"):
+                    ext_date = datetime.now().date() + timedelta(days=180)
+                    users_db[uname]["expiry_date"] = str(ext_date)
+                    save_users(users_db)
+                    st.success("Extended by 6 Months!")
+                    st.rerun()
+
+                if st.button(f"➕ 1 Year ({uname})", key=f"btn_1y_{uname}"):
+                    ext_date = datetime.now().date() + timedelta(days=365)
+                    users_db[uname]["expiry_date"] = str(ext_date)
+                    save_users(users_db)
+                    st.success("Extended by 1 Year!")
+                    st.rerun()
+
+            if st.button(f"💾 Save Changes for {uname}", key=f"save_{uname}"):
+                users_db[uname]["package"] = selected_pkg
+                users_db[uname]["expiry_date"] = str(new_exp_date)
+                save_users(users_db)
+                st.success(f"Successfully updated package to {selected_pkg.upper()} and expiry to {new_exp_date}!")
+                st.rerun()
+                
+            if st.button(f"🗑️ Delete Chamber {uname}", key=f"del_{uname}", type="secondary"):
+                del users_db[uname]
+                save_users(users_db)
+                st.success(f"Chamber {uname} deleted.")
+                st.rerun()
 
 # ---------------------------------------------------------------------
 # MODULE 0: HEARING REMINDERS
