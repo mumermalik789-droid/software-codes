@@ -1,0 +1,1358 @@
+import base64
+import csv
+from datetime import date, datetime, timedelta
+import hashlib
+from io import BytesIO
+import json
+import os
+import re
+import urllib.parse
+import uuid
+
+import anthropic
+import docx
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import parse_xml
+from docx.oxml.ns import nsdecls
+from PIL import Image
+import streamlit as st
+
+# ---------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# STREAMLIT SECRETS CONFIGURATION
+try:
+    BACKEND_API_KEY = st.secrets.get("ANTHROPIC_API_KEY", "")
+    BACKEND_WORKSPACE_ID = ""  # Agar workspace ID ki zaroorat nahi hai toh ise blank chhor dein
+except Exception:
+    BACKEND_API_KEY = ""
+    BACKEND_WORKSPACE_ID = ""
+
+# ---------------------------------------------------------------------
+# ADMIN CONTACT & PAYMENT DETAILS
+# ---------------------------------------------------------------------
+ADMIN_PHONE = "923056776645"  # Muhammad Umer WhatsApp Number
+ADMIN_NAME = "Muhammad Umer"
+ADMIN_EMAIL = "support@legalai.pk"
+
+# Standard Reliable Logo URLs
+WHATSAPP_LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/6/6b/WhatsApp.svg"
+EASYPAISA_LOGO_URL = "https://easypaisa.com.pk/wp-content/uploads/2023/04/ep-logo.png"
+
+def get_whatsapp_link(custom_msg=""):
+  encoded = urllib.parse.quote(custom_msg)
+  return f"https://wa.me/{ADMIN_PHONE}?text={encoded}"
+
+def render_payment_and_contact_card(custom_wa_msg="AoA Muhammad Umer, mujhe subscription/renewal ke hawale se baat karni hai."):
+  wa_link = get_whatsapp_link(custom_wa_msg)
+  st.markdown(
+      f"""
+      <div style="background: linear-gradient(135deg, #ffffff 0%, #f4f6f8 100%); border-radius: 12px; padding: 25px; border: 1px solid #e0e0e0; box-shadow: 0 4px 15px rgba(0,0,0,0.05); margin: 15px 0;">
+          <h3 style="color: #1b4332; margin-top: 0; font-family: 'Helvetica Neue', sans-serif; font-size: 20px; border-bottom: 2px solid #2d6a4f; padding-bottom: 8px;">
+              💳 Account Details & Instant Activation
+          </h3>
+          <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 15px; margin-top: 15px;">
+              <!-- EasyPaisa Box with Guaranteed Logo Badge -->
+              <div style="flex: 1; min-width: 260px; background: #ffffff; padding: 18px; border-radius: 10px; border-left: 6px solid #00ba74; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
+                  <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+                      <div style="background-color: #00ba74; color: white; border-radius: 6px; padding: 4px 8px; font-weight: bold; font-size: 14px; display: inline-flex; align-items: center; gap: 5px;">
+                          <span style="font-size: 16px;">🟢</span> easypaisa
+                      </div>
+                      <img src="{EASYPAISA_LOGO_URL}" alt="EasyPaisa" style="height: 28px; max-width: 120px; object-fit: contain;" onerror="this.style.display='none';">
+                  </div>
+                  <div style="font-size: 14px; color: #333333; line-height: 1.8;">
+                      <b>Account Title:</b> <span style="color: #1b4332; font-weight: bold;">{ADMIN_NAME}</span><br>
+                      <b>EasyPaisa Number:</b> <code style="font-size: 17px; color: #00ba74; font-weight: bold; background: #e8f8f2; padding: 2px 8px; border-radius: 4px;">03056776645</code>
+                  </div>
+              </div>
+              <!-- WhatsApp Contact Box -->
+              <div style="flex: 1; min-width: 260px; background: #ffffff; padding: 18px; border-radius: 10px; border-left: 6px solid #25D366; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
+                  <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                      <img src="{WHATSAPP_LOGO_URL}" alt="WhatsApp" style="height: 30px; width: 30px;">
+                      <span style="font-weight: bold; font-size: 16px; color: #333333;">Direct Admin WhatsApp</span>
+                  </div>
+                  <p style="font-size: 13px; color: #555555; margin: 0 0 12px 0;">
+                      Payment کا سکرین شاٹ واٹس ایپ پر بھیجیں تاکہ آپ کا اکاؤنٹ فوری ایکٹو کر دیا جائے۔
+                  </p>
+                  <a href="{wa_link}" target="_blank" style="text-decoration: none;">
+                      <div style="background-color: #25D366; color: white; text-align: center; padding: 10px 15px; border-radius: 6px; font-weight: bold; font-size: 14px; display: flex; align-items: center; justify-content: center; gap: 8px; box-shadow: 0 2px 5px rgba(37,211,102,0.3);">
+                          <img src="{WHATSAPP_LOGO_URL}" style="height: 18px; filter: brightness(0) invert(1);"> Chat with {ADMIN_NAME}
+                      </div>
+                  </a>
+              </div>
+          </div>
+      </div>
+      """,
+      unsafe_allow_html=True,
+  )
+
+# ---------------------------------------------------------------------
+# Page Setup & Professional Theme Styling
+# ---------------------------------------------------------------------
+st.set_page_config(
+    page_title="Pakistani Legal AI Portal (Multi-Chamber Edition)",
+    page_icon="⚖️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+st.markdown(
+    """
+    <style>
+    .main { background-color: #f8f9fa; }
+    .stButton>button { background-color: #1b4332; color: white; font-weight: bold; border-radius: 6px; padding: 0.5rem 1rem; border: none; }
+    .stButton>button:hover { background-color: #2d6a4f; color: white; }
+    h1, h2, h3 { color: #1b4332; font-family: 'Helvetica Neue', sans-serif; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ---------------------------------------------------------------------
+# AUTHENTICATION & MULTI-CHAMBER DATABASE MANAGEMENT
+# ---------------------------------------------------------------------
+USERS_FILE = "chamber_users.json"
+
+def load_users():
+  admin_data = {
+      "chamber_name": f"System Administrator ({ADMIN_NAME})",
+      "password": hashlib.sha256("admin123".encode()).hexdigest(),
+      "package": "premium",
+      "prompt_count": 0,
+      "last_reset_date": str(date.today()),
+      "expiry_date": "2099-12-31",
+      "is_admin": True,
+      "active_devices": []
+  }
+  if os.path.exists(USERS_FILE):
+    try:
+      with open(USERS_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+        data["admin"] = admin_data
+        return data
+    except Exception:
+      return {"admin": admin_data}
+  return {"admin": admin_data}
+
+def save_users(users_db):
+  try:
+    with open(USERS_FILE, "w", encoding="utf-8") as f:
+      json.dump(users_db, f, ensure_ascii=False, indent=4)
+  except Exception:
+    pass
+
+def hash_password(password):
+  return hashlib.sha256(password.encode()).hexdigest()
+
+if "authenticated_user" not in st.session_state:
+  st.session_state.authenticated_user = None
+
+if "device_token" not in st.session_state:
+  st.session_state.device_token = str(uuid.uuid4())
+
+users_db = load_users()
+
+# ---------------------------------------------------------------------
+# LOGIN & SIGNUP SCREEN
+# ---------------------------------------------------------------------
+if st.session_state.authenticated_user is None:
+  st.title("⚖️ PAKISTANI LEGAL AI PORTAL - CHAMBER ACCESS")
+  st.caption("Bar Chamber Management Portal - Secure Subscription & Access System")
+  st.markdown("---")
+
+  tab_login, tab_signup, tab_pricing = st.tabs(["🔐 Chamber Login", "📝 Register New Chamber", "💰 Packages & Pricing"])
+
+  with tab_login:
+    st.subheader("Login to Your Chamber Account")
+    login_user = st.text_input("Chamber Username / ID:", key="login_user")
+    login_pass = st.text_input("Password:", type="password", key="login_pass")
+
+    if st.button("🔑 Login to Chamber", type="primary"):
+      hashed_pass = hash_password(login_pass)
+      if login_user in users_db and users_db[login_user]["password"] == hashed_pass:
+        user_data = users_db[login_user]
+        
+        # Check Expiry Date (except for admin)
+        if not user_data.get("is_admin", False):
+          exp_date = user_data.get("expiry_date", str(date.today()))
+          if str(date.today()) > exp_date:
+            wa_msg = f"AoA {ADMIN_NAME}, mera chamber account ({login_user}) expire ho gaya hai. Mujhe subscription renew karwani hai."
+            st.error("⏳ **Subscription Expired!** Aapke account ki 3 days trial/monthly muddat khatam ho chuki hai.")
+            render_payment_and_contact_card(wa_msg)
+            st.stop()
+
+       # Check Device Limits (Premium: Max 3 devices, Basic/Standard: Max 2 devices)
+        if "active_devices" not in user_data:
+            user_data["active_devices"] = []
+
+        current_token = st.session_state.device_token
+        max_allowed_devices = 3 if user_data.get("package") == "premium" else 2
+
+        if current_token not in user_data["active_devices"]:
+            if len(user_data["active_devices"]) >= max_allowed_devices and not user_data.get("is_admin", False):
+                st.error(f"⚠️ **Device Limit Exceeded!** Aapke package `{user_data.get('package', '').upper()}` mein maximum {max_allowed_devices} devices allowed hain.")
+            else:
+                user_data["active_devices"].append(current_token)
+                save_users(users_db)
+                st.session_state.authenticated_user = login_user
+                st.success(f"Welcome, {user_data['chamber_name']}!")
+                st.rerun()
+        else:
+            st.session_state.authenticated_user = login_user
+            st.success(f"Welcome, {user_data['chamber_name']}!")
+            st.rerun()
+      else:
+        st.error("Invalid Username or Password!")
+
+  with tab_signup:
+    st.subheader("Create a New Chamber Profile (3-Days Free Trial)")
+    st.info("💡 Naya account banane par aapko **3 din ka Free Trial** milega.")
+    new_chamber = st.text_input("Chamber / Law Firm Name:")
+    new_user = st.text_input("Choose Username / Chamber ID:")
+    new_pass = st.text_input("Choose Password:", type="password")
+    new_package = st.selectbox("Select Desired Package:", ["Basic (PKR 2,500/mo - 15 prompts/day)", "Standard (PKR 4,000/mo - 25 prompts/day)", "Premium (PKR 6,500/mo - Unlimited)"])
+
+    if st.button("✨ Register Chamber"):
+      if new_chamber and new_user and new_pass:
+        if new_user in users_db:
+          st.error("Username already exists! Please choose another.")
+        else:
+          pkg_key = "basic"
+          if "Standard" in new_package:
+            pkg_key = "standard"
+          elif "Premium" in new_package:
+            pkg_key = "premium"
+
+          # 3 Days Trial Automatic Allocation
+          trial_expiry = str(date.today() + timedelta(days=3))
+
+          users_db[new_user] = {
+              "chamber_name": new_chamber,
+              "password": hash_password(new_pass),
+              "package": pkg_key,
+              "prompt_count": 0,
+              "last_reset_date": str(date.today()),
+              "expiry_date": trial_expiry,
+              "is_admin": False,
+              "active_devices": []
+          }
+          save_users(users_db)
+          st.success("🎉 Registration successful! Aapka 3-Days Free Trial active ho gaya hai. Aap ab login kar sakte hain.")
+      else:
+        st.error("Please fill in all registration details.")
+
+  with tab_pricing:
+    st.subheader("📦 Available Chamber Subscription Packages")
+    col_p1, col_p2, col_p3 = st.columns(3)
+    
+    with col_p1:
+      st.markdown(
+          """
+          <div style="background: white; padding: 20px; border-radius: 10px; border-top: 4px solid #28a745; box-shadow: 0 2px 10px rgba(0,0,0,0.05); text-align: center;">
+              <h3 style="color: #28a745; margin-bottom: 5px;">🟢 Basic</h3>
+              <h2 style="color: #333; margin: 10px 0;">PKR 2,500 <span style="font-size: 14px; color: #777;">/ Month</span></h2>
+              <p style="font-weight: bold; color: #1b4332;">15 Prompts / Day</p>
+              <hr style="border: 0.5px solid #eee;">
+              <p style="font-size: 13px; color: #555; line-height: 1.8;">
+                  ✅ All Law Practice Modules<br>
+                  ✅ Access on 2 Devices<br>
+                  ✅ Daily Limits Reset
+              </p>
+          </div>
+          """,
+          unsafe_allow_html=True,
+      )
+      
+    with col_p2:
+      st.markdown(
+          """
+          <div style="background: white; padding: 20px; border-radius: 10px; border-top: 4px solid #007bff; box-shadow: 0 2px 10px rgba(0,0,0,0.05); text-align: center;">
+              <h3 style="color: #007bff; margin-bottom: 5px;">🔵 Standard</h3>
+              <h2 style="color: #333; margin: 10px 0;">PKR 4,000 <span style="font-size: 14px; color: #777;">/ Month</span></h2>
+              <p style="font-weight: bold; color: #1b4332;">25 Prompts / Day</p>
+              <hr style="border: 0.5px solid #eee;">
+              <p style="font-size: 13px; color: #555; line-height: 1.8;">
+                  ✅ All Law Practice Modules<br>
+                  ✅ Access on 2 Devices<br>
+                  ✅ Daily Limits Reset
+              </p>
+          </div>
+          """,
+          unsafe_allow_html=True,
+      )
+
+    with col_p3:
+      st.markdown(
+          """
+          <div style="background: white; padding: 20px; border-radius: 10px; border-top: 4px solid #d9534f; box-shadow: 0 2px 10px rgba(0,0,0,0.05); text-align: center;">
+              <h3 style="color: #d9534f; margin-bottom: 5px;">👑 Premium</h3>
+              <h2 style="color: #333; margin: 10px 0;">PKR 6,500 <span style="font-size: 14px; color: #777;">/ Month</span></h2>
+              <p style="font-weight: bold; color: #1b4332;">Unlimited Prompts</p>
+              <hr style="border: 0.5px solid #eee;">
+              <p style="font-size: 13px; color: #555; line-height: 1.8;">
+                  ✅ All Law Practice Modules<br>
+                  ✅ Access on 2 Devices<br>
+                  ✅ High Priority AI Server
+              </p>
+          </div>
+          """,
+          unsafe_allow_html=True,
+      )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    render_payment_and_contact_card(f"AoA {ADMIN_NAME}, mujhe naya package buy karna hai.")
+
+  st.stop()
+
+# ---------------------------------------------------------------------
+# USER-SPECIFIC DATA & PACKAGE USAGE CHECK
+# ---------------------------------------------------------------------
+current_user = st.session_state.authenticated_user
+chamber_name = users_db[current_user]["chamber_name"]
+user_package = users_db[current_user].get("package", "basic")
+is_user_admin = users_db[current_user].get("is_admin", False)
+
+# Check Expiry
+if not is_user_admin:
+  exp_date = users_db[current_user].get("expiry_date", str(date.today()))
+  if str(date.today()) > exp_date:
+    wa_msg = f"AoA {ADMIN_NAME}, mera chamber account ({current_user}) expire ho gaya hai. Renewal ke liye madad fermayein."
+    st.error("⏳ **Subscription Expired!** Aapke account ki muddat khatam ho chuki hai.")
+    render_payment_and_contact_card(wa_msg)
+    if st.button("🚪 Logout"):
+      st.session_state.authenticated_user = None
+      st.rerun()
+    st.stop()
+
+# Check and reset daily prompt counts
+today_str = str(date.today())
+if users_db[current_user].get("last_reset_date") != today_str:
+  users_db[current_user]["prompt_count"] = 0
+  users_db[current_user]["last_reset_date"] = today_str
+  save_users(users_db)
+
+CLIENT_FILE = f"clients_{current_user}.csv"
+INVOICE_FILE = f"invoices_{current_user}.csv"
+HISTORY_FILE = f"history_{current_user}.json"
+
+if "clients" not in st.session_state:
+  st.session_state.clients = []
+  if os.path.exists(CLIENT_FILE):
+    try:
+      with open(CLIENT_FILE, mode="r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+          st.session_state.clients.append(row)
+    except Exception:
+      pass
+
+if "invoices" not in st.session_state:
+  st.session_state.invoices = []
+  if os.path.exists(INVOICE_FILE):
+    try:
+      with open(INVOICE_FILE, mode="r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+          st.session_state.invoices.append(row)
+    except Exception:
+      pass
+
+if "history" not in st.session_state:
+  st.session_state.history = []
+  if os.path.exists(HISTORY_FILE):
+    try:
+      with open(HISTORY_FILE, mode="r", encoding="utf-8") as f:
+        st.session_state.history = json.load(f)
+    except Exception:
+      pass
+
+def save_clients_to_csv():
+  try:
+    with open(CLIENT_FILE, mode="w", newline="", encoding="utf-8") as file_obj:
+      fieldnames = ["name", "phone", "fir", "court", "date", "notes"]
+      writer = csv.DictWriter(file_obj, fieldnames=fieldnames)
+      writer.writeheader()
+      for c in st.session_state.clients:
+        writer.writerow(c)
+  except Exception:
+    pass
+
+def save_history_to_json():
+  try:
+    with open(HISTORY_FILE, mode="w", encoding="utf-8") as f:
+      json.dump(st.session_state.history, f, ensure_ascii=False, indent=4)
+  except Exception:
+    pass
+
+def save_invoices_to_csv():
+  try:
+    with open(INVOICE_FILE, mode="w", newline="", encoding="utf-8") as file_obj:
+      fieldnames = ["client_name", "case_ref", "fee_amount", "status", "date"]
+      writer = csv.DictWriter(file_obj, fieldnames=fieldnames)
+      writer.writeheader()
+      for inv in st.session_state.invoices:
+        writer.writerow(inv)
+  except Exception:
+    pass
+
+# ---------------------------------------------------------------------
+# HEADER & SIDEBAR: LOGOUT, CONTACT & NAVIGATION
+# ---------------------------------------------------------------------
+st.sidebar.markdown(f"### 🏛️ **{chamber_name}**")
+st.sidebar.caption(f"Logged in as: `{current_user}`")
+st.sidebar.markdown(f"📦 **Package:** `{user_package.upper()}`")
+if not is_user_admin:
+  st.sidebar.caption(f"📅 **Expiry:** `{users_db[current_user].get('expiry_date', 'N/A')}`")
+
+current_usage = users_db[current_user].get("prompt_count", 0)
+if user_package == "basic":
+  st.sidebar.progress(min(current_usage / 15.0, 1.0))
+  st.sidebar.caption(f"Daily Usage: {current_usage} / 15 Prompts")
+elif user_package == "standard":
+  st.sidebar.progress(min(current_usage / 25.0, 1.0))
+  st.sidebar.caption(f"Daily Usage: {current_usage} / 25 Prompts")
+else:
+  st.sidebar.caption(f"Daily Usage: {current_usage} Prompts (Unlimited)")
+
+# Sidebar Styled WhatsApp Button
+st.sidebar.markdown(
+    f"""
+    <a href="{get_whatsapp_link(f'AoA {ADMIN_NAME}, mujhe help / package upgrade chahiye.')}" target="_blank" style="text-decoration: none;">
+        <div style="background-color: #25D366; color: white; border-radius: 6px; padding: 8px; text-align: center; font-weight: bold; margin: 10px 0; display: flex; align-items: center; justify-content: center; gap: 8px;">
+            <img src="{WHATSAPP_LOGO_URL}" style="height: 18px; filter: brightness(0) invert(1);"> WhatsApp Admin ({ADMIN_NAME})
+        </div>
+    </a>
+    """,
+    unsafe_allow_html=True,
+)
+
+if st.sidebar.button("🚪 Logout Chamber"):
+  if current_user in users_db and "active_devices" in users_db[current_user]:
+    if st.session_state.device_token in users_db[current_user]["active_devices"]:
+      users_db[current_user]["active_devices"].remove(st.session_state.device_token)
+      save_users(users_db)
+      
+  st.session_state.authenticated_user = None
+  st.session_state.clients = []
+  st.session_state.invoices = []
+  st.session_state.history = []
+  for key in list(st.session_state.keys()):
+    del st.session_state[key]
+  st.rerun()
+
+st.sidebar.markdown("---")
+st.sidebar.title("🌐 Select Language")
+language = st.sidebar.radio(
+    "Drafting Language:",
+    ["English (Legal Standard)", "Urdu (قانونی اردو)", "Roman Urdu"],
+)
+
+st.sidebar.markdown("---")
+st.sidebar.title("📂 Navigation Portal")
+
+nav_modules = [
+    "📅 Hearing Reminders & Notifications (Priority)",
+    "📜 Constitution of Pakistan Portal",
+    "📜 Supreme/High Court Judgments & Act Search (CPC, PPC, QSO, CrPC)",
+    "⚖️ Citation Verifier & Judgment Status",
+    "🔍 FIR Summarizer & Analysis",
+    "🎨 Custom Practice Template Adapter",
+    "🏛️ Criminal Law Portal",
+    "📜 Civil Law Portal",
+    "💍 Family Law Portal",
+    "💻 Cyber Crime Portal",
+    "📜 Constitutional / Writ Portal",
+    "🌾 Revenue & Property Law Portal",
+    "👥 Client CRM & Records",
+    "💰 Fee & Invoice Manager",
+    "📜 Search & Draft History",
+]
+
+if is_user_admin:
+  nav_modules.insert(0, "👑 Admin Panel (Manage Subscriptions & Access)")
+
+app_mode = st.sidebar.selectbox("Select Module:", nav_modules)
+
+st.title(f"⚖️ {chamber_name.upper()} - LEGAL PORTAL")
+st.caption("Chamber Management & AI Practice System")
+st.markdown("---")
+
+# Initialize Anthropic Client
+client = None
+try:
+    client = anthropic.Anthropic(api_key=BACKEND_API_KEY)
+except Exception as e:
+    st.error(f"Backend API Configuration Error: {e}")
+
+# ---------------------------------------------------------------------
+# HELPER FUNCTIONS
+# ---------------------------------------------------------------------
+def print_page_button():
+  st.markdown(
+      """
+        <button onclick="window.print()" style="background-color: #2d6a4f; color: white; padding: 10px 20px; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; margin-bottom: 15px;">
+            🖨️ Print This Page / Result
+        </button>
+        """,
+      unsafe_allow_html=True,
+  )
+
+def extract_text_from_docx(file):
+  if file is None:
+    return ""
+  doc = docx.Document(file)
+  full_text = []
+  for para in doc.paragraphs:
+    if para.text.strip():
+      full_text.append(para.text.strip())
+  return "\n".join(full_text)
+
+def create_word_document(text_content, is_urdu=False):
+  doc = docx.Document()
+  for line in text_content.split("\n"):
+    line_str = line.strip()
+    if not line_str:
+      continue
+    p = doc.add_paragraph()
+    if is_urdu:
+      p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+      pPr = p._p.get_or_add_pPr()
+      pPr.append(parse_xml(f'<w:bdr {nsdecls("w")}/>'))
+      pPr.append(parse_xml(f'<w:bidi {nsdecls("w")}/>'))
+    else:
+      p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+    parts = re.split(r"(\*\*.*?\*\*)", line_str)
+    for part in parts:
+      if not part:
+        continue
+      run = p.add_run()
+      if part.startswith("**") and part.endswith("**"):
+        run.text = part[2:-2]
+        run.bold = True
+      else:
+        run.text = part.replace("###", "").replace("##", "")
+
+      if is_urdu:
+        run.font.name = "Jameel Noori Nastaliq"
+        run.font.size = docx.shared.Pt(14)
+        rPr = run._r.get_or_add_rPr()
+        rPr.append(
+            parse_xml(
+                f'<w:rFonts {nsdecls("w")} w:cs="Jameel Noori Nastaliq"'
+                ' w:ascii="Calibri" w:hAnsi="Calibri"/>'
+            )
+        )
+      else:
+        run.font.name = "Calibri"
+        run.font.size = docx.shared.Pt(12)
+
+  bio = BytesIO()
+  doc.save(bio)
+  bio.seek(0)
+  return bio
+
+def display_output(content, lang):
+  print_page_button()
+  if "Urdu" in lang:
+    st.markdown(
+        '<div style="text-align: right; direction: rtl; font-family: Noto'
+        " Nastaliq Urdu, Arial; font-size: 18px; line-height: 1.8; background:"
+        " #ffffff; padding: 20px; border-radius: 6px; border: 1px solid"
+        f' #cccccc; color: #000000;">{content}</div>',
+        unsafe_allow_html=True,
+    )
+  else:
+    st.markdown(
+        '<div style="background: #ffffff; padding: 20px; border-radius: 6px;'
+        ' border: 1px solid #cccccc; color:'
+        f' #000000;">{content}</div>',
+        unsafe_allow_html=True,
+    )
+
+def validate_and_process_image(uploaded_img):
+  if uploaded_img is None:
+    return True, None
+  size_in_kb = uploaded_img.size / 1024
+  if size_in_kb > 500:
+    st.info(f"ℹ️ Image size {size_in_kb:.1f}KB hai. System compress kar raha hai...")
+    return True, compress_image_to_under_500kb(uploaded_img)
+  else:
+    return True, uploaded_img
+
+def compress_image_to_under_500kb(image_file):
+  img = Image.open(image_file)
+  if img.mode in ("RGBA", "P"):
+    img = img.convert("RGB")
+  max_dim = 1280
+  if max(img.size) > max_dim:
+    img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+  output_io = BytesIO()
+  quality = 85
+  while True:
+    output_io.seek(0)
+    output_io.truncate(0)
+    img.save(output_io, format="JPEG", quality=quality)
+    if output_io.tell() <= 500 * 1024 or quality <= 20:
+      break
+    quality -= 10
+  output_io.seek(0)
+  return output_io
+
+def encode_image(image_file):
+  compressed_io = compress_image_to_under_500kb(image_file)
+  return base64.b64encode(compressed_io.getvalue()).decode("utf-8")
+
+def get_language_instruction(lang):
+  if "Urdu (قانونی اردو)" in lang:
+    return """IMPORTANT: Write the ENTIRE output strictly in High Court & District Court Standard Pakistani Legal Urdu (مستند و باضابطہ قانونی اردو). 
+Follow authentic Pakistani advocate drafting terms (e.g. بعدالت جناب, سائل/درخواست گزار, مسئول عنہ, عرض ہے کہ, استدعا ہے کہ, حلف نامہ)."""
+  elif "Roman Urdu" in lang:
+    return "IMPORTANT: Write the ENTIRE output strictly in Roman Urdu (Pakistani Urdu written in English script)."
+  else:
+    return "IMPORTANT: Write the ENTIRE output strictly in Standard Legal English as used in High Courts and Supreme Court of Pakistan."
+
+lang_instruction = get_language_instruction(language)
+SYSTEM_LEGAL_PROMPT = """
+You are an expert Senior Advocate and Legal Drafter practicing in the High Courts and Supreme Court of Pakistan.
+You excel at researching Pakistani laws (Constitution of Pakistan, CPC, PPC, CrPC, QSO, Revenue Laws), finding Supreme Court and High Court precedents/judgments, and drafting formal legal documents.
+"""
+
+def generate_ai_response(prompt_text, image_file=None):
+  global users_db
+  u_data = users_db[current_user]
+  pkg = u_data.get("package", "basic")
+  count = u_data.get("prompt_count", 0)
+
+  # Check daily prompt limits
+  if not is_user_admin:
+    if pkg == "basic" and count >= 15:
+      wa_msg = f"AoA {ADMIN_NAME}, mera basic package limit (15) poori ho chuki hai. Mujhe package upgrade karwana hai."
+      st.error("🚫 **Daily Prompt Limit Reached!** Aapke Basic package ki 15 prompts ki limit mukammal ho chuki hai.")
+      render_payment_and_contact_card(wa_msg)
+      st.stop()
+    elif pkg == "standard" and count >= 25:
+      wa_msg = f"AoA {ADMIN_NAME}, mera standard package limit (25) poori ho chuki hai. Mujhe Premium package upgrade karwana hai."
+      st.error("🚫 **Daily Prompt Limit Reached!** Aapke Standard package ki 25 prompts ki limit mukammal ho chuki hai.")
+      render_payment_and_contact_card(wa_msg)
+      st.stop()
+
+  messages = []
+  if image_file is not None:
+    base64_image = encode_image(image_file)
+    messages.append({
+        "role": "user",
+        "content": [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": base64_image,
+                },
+            },
+            {"type": "text", "text": prompt_text},
+        ],
+    })
+  else:
+    messages.append({"role": "user", "content": prompt_text})
+
+  try:
+    res = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=3500,
+        system=SYSTEM_LEGAL_PROMPT,
+        messages=messages,
+    )
+    
+    # Increment count ONLY AFTER successful response generation
+    u_data["prompt_count"] = count + 1
+    save_users(users_db)
+    
+    return res.content[0].text
+
+  except Exception as e:
+    st.error(f"AI Response Generation Error: {e}")
+    st.stop()
+
+def save_and_display_result(prompt_text, category_label, result_text, lang):
+  st.session_state.history.append({
+      "time": datetime.now().strftime("%d-%m-%Y %H:%M"),
+      "type": category_label,
+      "query": prompt_text[:120] + "...",
+      "result": result_text,
+      "lang": lang,
+  })
+  save_history_to_json()
+  display_output(result_text, lang)
+  st.download_button(
+      "📥 Download as Word (.docx)",
+      create_word_document(result_text, "Urdu" in lang),
+      f"Legal_Draft_{datetime.now().strftime('%d%m%Y_%H%M')}.docx",
+  )
+
+def build_template_context(file_upload):
+  extracted_style = ""
+  if file_upload is not None:
+    try:
+      extracted_style = extract_text_from_docx(file_upload)
+    except Exception:
+      pass
+  if extracted_style:
+    return f"""
+CRITICAL INSTRUCTION FOR STYLE & VOCABULARY MATCHING:
+Analyze the uploaded reference template below and strictly adopt its phrasing, vocabulary, and structural style:
+--- UPLOADED TEMPLATE START ---
+{extracted_style}
+--- UPLOADED TEMPLATE END ---
+"""
+  return "Follow standard Pakistani court drafting style and terminology."
+
+# ---------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# 👑 ADMIN PANEL MODULE (WITH DEVICE TRACKING & DELETION)
+# ---------------------------------------------------------------------
+if app_mode == "👑 Admin Panel (Manage Subscriptions & Access)":
+    st.subheader(f"👑 Master Admin Panel ({ADMIN_NAME}) - Subscriptions & Access")
+    st.caption("Yahan se aap tamam registered chambers ki subscriptions, expiry dates, aur active logged-in devices manage kar sakte hain.")
+
+    users_db = load_users()
+
+    for uname, udata in users_db.items():
+        if uname == "admin":
+            continue
+        
+        with st.expander(f"🏛️ Chamber: {udata.get('chamber_name', uname)} (ID: `{uname}`)", expanded=False):
+            
+            # --- ACTIVE DEVICES MANAGEMENT ---
+            active_devs = udata.get("active_devices", [])
+            max_devs = 3 if udata.get("package") == "premium" else 2
+            
+            st.markdown(f"📱 **Active Logged-in Devices ({len(active_devs)} / {max_devs} Allowed):**")
+            if active_devs:
+                for idx, dev_id in enumerate(active_devs, 1):
+                    col_d1, col_d2 = st.columns([4, 1])
+                    with col_d1:
+                        st.code(f"Device {idx}: {dev_id}")
+                    with col_d2:
+                        if st.button("❌ Delete", key=f"del_dev_{uname}_{idx}"):
+                            users_db[uname]["active_devices"].remove(dev_id)
+                            save_users(users_db)
+                            st.success(f"Device {idx} remove kar di gayi!")
+                            st.rerun()
+            else:
+                st.info("ℹ️ Abhi koi device logged in nahi hai.")
+            
+            if active_devs and st.button(f"🔄 Clear / Logout All Devices for `{uname}`", key=f"clear_all_dev_{uname}"):
+                users_db[uname]["active_devices"] = []
+                save_users(users_db)
+                st.success(f"`{uname}` ki tamam logged-in devices clear kar di gayi hain!")
+                st.rerun()
+
+            st.markdown("---")
+
+            col_a1, col_a2, col_a3 = st.columns(3)
+            
+            with col_a1:
+                current_pkg = udata.get("package", "basic")
+                pkg_options = ["basic", "standard", "premium"]
+                selected_pkg = st.selectbox(f"Select Package ({uname}):", pkg_options, index=pkg_options.index(current_pkg) if current_pkg in pkg_options else 0, key=f"pkg_{uname}")
+            
+            with col_a2:
+                current_exp = udata.get("expiry_date", str(date.today()))
+                try:
+                    default_date_obj = datetime.strptime(current_exp, "%Y-%m-%d").date()
+                except Exception:
+                    default_date_obj = date.today()
+                
+                new_exp_date = st.date_input(f"Expiry Date ({uname}):", value=default_date_obj, key=f"exp_{uname}")
+            
+            with col_a3:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button(f"➕ 1 Month ({uname})", key=f"btn_1m_{uname}"):
+                    ext_date = datetime.now().date() + timedelta(days=30)
+                    users_db[uname]["expiry_date"] = str(ext_date)
+                    save_users(users_db)
+                    st.success("Extended by 1 Month!")
+                    st.rerun()
+                    
+                if st.button(f"➕ 6 Months ({uname})", key=f"btn_6m_{uname}"):
+                    ext_date = datetime.now().date() + timedelta(days=180)
+                    users_db[uname]["expiry_date"] = str(ext_date)
+                    save_users(users_db)
+                    st.success("Extended by 6 Months!")
+                    st.rerun()
+
+                if st.button(f"➕ 1 Year ({uname})", key=f"btn_1y_{uname}"):
+                    ext_date = datetime.now().date() + timedelta(days=365)
+                    users_db[uname]["expiry_date"] = str(ext_date)
+                    save_users(users_db)
+                    st.success("Extended by 1 Year!")
+                    st.rerun()
+
+            if st.button(f"💾 Save Changes for {uname}", key=f"save_{uname}"):
+                users_db[uname]["package"] = selected_pkg
+                users_db[uname]["expiry_date"] = str(new_exp_date)
+                save_users(users_db)
+                st.success(f"Successfully updated package to {selected_pkg.upper()} and expiry to {new_exp_date}!")
+                st.rerun()
+                
+            if st.button(f"🗑️ Delete Chamber {uname}", key=f"del_{uname}", type="secondary"):
+                del users_db[uname]
+                save_users(users_db)
+                st.success(f"Chamber {uname} deleted.")
+                st.rerun()
+
+# ---------------------------------------------------------------------
+# MODULE 0: HEARING REMINDERS
+# ---------------------------------------------------------------------
+elif app_mode == "📅 Hearing Reminders & Notifications (Priority)":
+  st.subheader("📅 Priority Permanent Hearing Dates & Chamber WhatsApp Reminders")
+  print_page_button()
+
+  if not st.session_state.clients:
+    st.info("Abhi tak koi client add nahi kiya gaya.")
+  else:
+    today_date_str = str(date.today())
+    st.markdown("### 📌 All Upcoming & Saved Hearings")
+    for idx, cl in enumerate(st.session_state.clients):
+      h_date = cl.get("date", "")
+      is_today = h_date == today_date_str
+      b_color = (
+          "border-left: 5px solid #d9534f;"
+          if is_today
+          else "border-left: 5px solid #5cb85c;"
+      )
+
+      st.markdown(
+          f"""
+            <div style="padding: 15px; margin-bottom: 12px; background-color: #f9f9f9; {b_color} border-radius: 4px; border: 1px solid #e3e3e3;">
+                <b>Client:</b> {cl['name']} &nbsp;|&nbsp; <b>FIR / Ref:</b> {cl['fir']} <br>
+                <b>Court:</b> {cl.get('court', 'N/A')} &nbsp;|&nbsp; <b>Next Hearing Date:</b> <code>{h_date}</code> {'<span style="color:red; font-weight:bold;">(TODAY!)</span>' if is_today else ''}<br>
+                <b>Remarks:</b> {cl.get('notes', 'No notes')}
+            </div>
+            """,
+          unsafe_allow_html=True,
+      )
+
+      wa_phone = cl.get("phone", "").strip()
+      wa_msg = f"Mohtaram {cl['name']}, aapke case ({cl['fir']}) ki meharbani adalat mein waqt par tashrif layein. - {chamber_name}"
+      encoded_msg = urllib.parse.quote(wa_msg)
+      wa_url = f"https://wa.me/{wa_phone}?text={encoded_msg}"
+
+      if wa_phone:
+        st.markdown(
+            f"💬 [📱 Send WhatsApp Reminder for {cl['name']}]({wa_url})",
+            unsafe_allow_html=True,
+        )
+
+      st.markdown("---")
+
+# ---------------------------------------------------------------------
+# MODULE 1: CONSTITUTION OF PAKISTAN PORTAL
+# ---------------------------------------------------------------------
+elif app_mode == "📜 Constitution of Pakistan Portal":
+  st.subheader("📜 Constitution of Pakistan, 1973 - Research & Guidance Portal")
+  col_con1, col_con2 = st.columns(2)
+  with col_con1:
+    const_article = st.text_input("Enter Article Number or Subject:", "Article 199")
+  with col_con2:
+    const_focus = st.selectbox(
+        "Focus Area:",
+        [
+            "General Interpretation & Bare Act Text Details",
+            "Supreme Court & High Court Case Law / Judgments",
+            "Infringement of Fundamental Rights & Remedies",
+            "Constitutional Petition / Writ Maintainability",
+        ],
+    )
+
+  const_query = st.text_area(
+      "Enter Specific Constitutional Question or Case Details:", height=150
+  )
+
+  if st.button("🔍 Search Constitutional Law & Judgments", type="primary"):
+    with st.spinner("Researching Constitution of Pakistan with Claude..."):
+      prompt = f"""
+{lang_instruction}
+Conduct expert constitutional research based on the Constitution of the Islamic Republic of Pakistan, 1973.
+- Target Article / Provision: {const_article}
+- Focus Area: {const_focus}
+- Specific Query / Case Context: {const_query}
+"""
+      res = generate_ai_response(prompt)
+      save_and_display_result(prompt, "Constitution of Pakistan Portal", res, language)
+
+# ---------------------------------------------------------------------
+# MODULE 2: SUPREME/HIGH COURT JUDGMENTS & ACT SEARCH
+# ---------------------------------------------------------------------
+elif app_mode == "📜 Supreme/High Court Judgments & Act Search (CPC, PPC, QSO, CrPC)":
+  st.subheader("📜 Supreme & High Court Case Law & Act Research")
+  act_choice = st.selectbox(
+      "Select Main Legal Code / Act:",
+      [
+          "CrPC (Code of Criminal Procedure, 1898)",
+          "PPC (Pakistan Penal Code, 1860)",
+          "CPC (Code of Civil Procedure, 1908)",
+          "QSO (Qanun-e-Shahadat Order, 1984)",
+          "Other Special Act / Constitution / Revenue Law",
+      ],
+  )
+  col_s1, col_s2 = st.columns(2)
+  with col_s1:
+    section_query = st.text_input("Section / Provision No.:", "Section 497 CrPC")
+  with col_s2:
+    jurisdiction_choice = st.selectbox(
+        "Court Precedents Required:",
+        [
+            "Supreme Court of Pakistan & High Courts",
+            "Lahore High Court Lahore",
+            "Sindh High Court Karachi",
+        ],
+    )
+
+  research_query = st.text_area(
+      "Enter Legal Question, Dispute Details or Point to Research:", height=150
+  )
+
+  if st.button("🔍 Search Case Law & Judgments", type="primary"):
+    with st.spinner("Searching Court precedents..."):
+      prompt = f"""
+{lang_instruction}
+Conduct legal research on Pakistani law:
+- Selected Act: {act_choice}
+- Provision: {section_query}
+- Jurisdiction: {jurisdiction_choice}
+- Facts/Query: {research_query}
+"""
+      res = generate_ai_response(prompt)
+      save_and_display_result(prompt, "Case Law & Act Search", res, language)
+
+# ---------------------------------------------------------------------
+# MODULE: CITATION VERIFIER & JUDGMENT STATUS
+# ---------------------------------------------------------------------
+elif app_mode == "⚖️ Citation Verifier & Judgment Status":
+  st.subheader("⚖️ Pakistani Citation Verifier & Precedent Status Checker")
+  st.caption("Verify Supreme Court / High Court citations, parallel references, and whether the judgment is still in-field or overruled.")
+
+  col_cv1, col_cv2 = st.columns(2)
+  with col_cv1:
+    citation_input = st.text_input(
+        "Enter Citation (e.g., 2024 SCMR 1122 or PLD 2023 SC 45):",
+        "2024 SCMR ",
+    )
+  with col_cv2:
+    court_level = st.selectbox(
+        "Jurisdiction / Court:",
+        [
+            "Supreme Court of Pakistan",
+            "Lahore High Court",
+            "Sindh High Court",
+            "Islamabad High Court",
+            "Peshawar High Court",
+        ],
+    )
+
+  legal_issue_context = st.text_area(
+      "Optional: Enter Case Topic or Legal Point to Cross-Check (e.g., Bail after statutory delay):",
+      height=100,
+  )
+
+  if st.button("🔍 Verify Citation & Status", type="primary"):
+    with st.spinner("Verifying citation authenticity and judgment status with Claude..."):
+      prompt = f"""
+{lang_instruction}
+Act as an expert Pakistani legal researcher and advocate of the Supreme Court of Pakistan.
+Verify the following legal citation/precedent details:
+- Citation to Verify: {citation_input}
+- Court Level: {court_level}
+- Legal Topic/Context: {legal_issue_context}
+
+Please provide a detailed report covering:
+1. **Citation Breakdown & Authenticity:** Confirm exact parties, year, volume, and reporter (SCMR, PLD, CLC).
+2. **Parallel Citations:** Provide equivalent citations.
+3. **Current Status:** Holding field or overruled.
+4. **Ratio Decidendi:** Summary of core legal principle.
+"""
+      res = generate_ai_response(prompt)
+      save_and_display_result(prompt, "Citation Verifier & Status", res, language)
+
+# ---------------------------------------------------------------------
+# MODULE 3: FIR SUMMARIZER
+# ---------------------------------------------------------------------
+elif app_mode == "🔍 FIR Summarizer & Analysis":
+  st.subheader("🔍 FIR Summarizer & Case Analysis Portal")
+  fir_text_input = st.text_area("Paste FIR Text Here:", height=200)
+  fir_img = st.file_uploader(
+      "Upload FIR Snapshot / Image:", type=["jpg", "png", "jpeg"]
+  )
+  is_v_fir, proc_fir_img = validate_and_process_image(fir_img)
+
+  if st.button("📊 Summarize FIR & Analyze Case", type="primary"):
+    if not is_v_fir:
+      st.error("Image upload error!")
+    else:
+      with st.spinner("Summarizing FIR..."):
+        prompt = f"""
+{lang_instruction}
+Analyze and summarize the provided First Information Report (FIR) for a Pakistani advocate.
+FIR TEXT:
+{fir_text_input}
+"""
+        res = generate_ai_response(prompt, image_file=proc_fir_img)
+        save_and_display_result(prompt, "FIR Summarizer", res, language)
+
+# ---------------------------------------------------------------------
+# MODULE 4: CUSTOM PRACTICE TEMPLATE ADAPTER
+# ---------------------------------------------------------------------
+elif app_mode == "🎨 Custom Practice Template Adapter":
+  st.subheader("🎨 Custom Chamber Template Adapter")
+  uploaded_template = st.file_uploader(
+      "Upload Sample Chamber Template (.docx)", type=["docx"]
+  )
+  col_t1, col_t2 = st.columns(2)
+  with col_t1:
+    case_type = st.text_input("Application / Petition Title:", "Bail Application / Plaint / Writ")
+    custom_court = st.text_input("Target Court Forum:", "In the Court of Sessions Judge, Lahore")
+  with col_t2:
+    custom_parties = st.text_input("Parties Title:", "Muhammad Ali VS The State")
+    custom_sections = st.text_input("Law / Sections / Offence:", "Section 489-F / 420 PPC")
+
+  new_facts = st.text_area("Enter New Case Facts & Specific Grounds for Drafting:", height=150)
+
+  if st.button("🤖 Generate Customized Legal Draft", type="primary"):
+    with st.spinner("Generating Customized Draft..."):
+      temp_ctx = build_template_context(uploaded_template)
+      full_prompt = f"""
+{lang_instruction}
+{temp_ctx}
+Document Type: {case_type}
+Court Forum: {custom_court}
+Parties: {custom_parties}
+Sections/Law: {custom_sections}
+Facts/Grounds: {new_facts}
+"""
+      res = generate_ai_response(full_prompt)
+      save_and_display_result(full_prompt, "Custom Template Generator", res, language)
+
+# ---------------------------------------------------------------------
+# MODULES 5 to 13
+# ---------------------------------------------------------------------
+elif app_mode == "🏛️ Criminal Law Portal":
+  st.subheader("⚖️ Criminal Law Practice Portal")
+  criminal_module = st.selectbox("Choose Criminal Module:", ["Pre-Arrest Bail Petition (Sec 498 CrPC)", "Post-Arrest Bail Petition (Sec 497 CrPC)", "Application u/s 22-A / 22-B CrPC", "Superdari Application", "Specialized Drug Case (CNSA 9-C) Bail", "Criminal Revision & Appeal"])
+  crim_file = st.file_uploader("Upload Template (.docx) [Optional]:", type=["docx"], key="crim_up")
+  col1, col2 = st.columns(2)
+  with col1:
+    c_court = st.text_input("Court Forum:", "Court of Sessions Judge, Lahore")
+    c_parties = st.text_input("Parties:", "Muhammad Akram VS The State")
+  with col2:
+    c_ps = st.text_input("Police Station:", "PS Model Town, Lahore")
+    c_sec = st.text_input("FIR No & Sections:", "FIR No. 120/2026 u/s 392/34 PPC")
+  crim_img = st.file_uploader("Upload Image/FIR Snapshot [Optional]:", type=["jpg", "png", "jpeg"], key="cimg")
+  is_v, proc_img = validate_and_process_image(crim_img)
+  crim_facts = st.text_area("Enter Case Details & Specific Grounds:", height=150)
+
+  if st.button("🖊️ Generate Criminal Draft", type="primary"):
+    if not is_v:
+      st.error("Image processing error!")
+    else:
+      with st.spinner("Drafting criminal document..."):
+        t_ctx = build_template_context(crim_file)
+        prompt = f"""
+{lang_instruction}
+{t_ctx}
+Generate Criminal Document for Module: {criminal_module}
+- Court: {c_court}
+- Parties: {c_parties}
+- Police Station: {c_ps}
+- FIR/Sections: {c_sec}
+- Case Grounds/Facts: {crim_facts}
+"""
+        res = generate_ai_response(prompt, image_file=proc_img)
+        save_and_display_result(prompt, f"Criminal Law ({criminal_module})", res, language)
+
+elif app_mode == "📜 Civil Law Portal":
+  st.subheader("📜 Civil Law Practice Portal")
+  civil_module = st.selectbox("Choose Civil Module:", ["Plaint (Daawa) - Declaration & Permanent Injunction", "Plaint (Daawa) - Specific Performance of Contract", "Written Statement (Jawab-e-Dawa)", "Temporary Injunction Application (Order 39 Rule 1 & 2 CPC)", "Execution Petition (Order 21 CPC)"])
+  civ_file = st.file_uploader("Upload Template (.docx) [Optional]:", type=["docx"], key="civ_up")
+  col1, col2 = st.columns(2)
+  with col1:
+    cv_court = st.text_input("Court Forum:", "Court of Senior Civil Judge, Lahore")
+    cv_parties = st.text_input("Parties:", "Tariq Mahmood VS Province of Punjab")
+  with col2:
+    cv_area = st.text_input("Area / Revenue Station:", "Mauza Kot Lakhpat, Lahore")
+    cv_act = st.text_input("Law / Act Provisions:", "Specific Relief Act (I of 1877)")
+  civ_img = st.file_uploader("Upload Document Snapshot [Optional]:", type=["jpg", "png", "jpeg"], key="cvimg")
+  is_cv, proc_cv = validate_and_process_image(civ_img)
+  civ_facts = st.text_area("Enter Civil Case Particulars & Property Details:", height=150)
+
+  if st.button("🖊️ Generate Civil Draft", type="primary"):
+    if not is_cv:
+      st.error("Image processing error!")
+    else:
+      with st.spinner("Drafting civil document..."):
+        t_ctx = build_template_context(civ_file)
+        prompt = f"""
+{lang_instruction}
+{t_ctx}
+Generate Civil Document for Module: {civil_module}
+- Court: {cv_court}
+- Parties: {cv_parties}
+- Area/Station: {cv_area}
+- Provision: {cv_act}
+- Case Details/Facts: {civ_facts}
+"""
+        res = generate_ai_response(prompt, image_file=proc_cv)
+        save_and_display_result(prompt, f"Civil Law ({civil_module})", res, language)
+
+elif app_mode == "💍 Family Law Portal":
+  st.subheader("💍 Family Law Practice Portal")
+  fam_module = st.selectbox("Choose Family Module:", ["Suit for Dissolution of Marriage (Khula)", "Suit for Recovery of Maintenance Allowance (Naan-Nafqa)", "Suit for Recovery of Dower & Dowry Articles", "Guardian & Wards Petition (Custody of Minors)", "Written Statement in Family Suit"])
+  fam_file = st.file_uploader("Upload Custom Template (.docx) [Optional]:", type=["docx"], key="fam_up")
+  col1, col2 = st.columns(2)
+  with col1:
+    f_court = st.text_input("Court Forum:", "Court of Judge Family Court, Lahore")
+    f_parties = st.text_input("Parties Title:", "Mst. Ayesha Bibi VS Muhammad Bilal")
+  with col2:
+    f_loc = st.text_input("Locality / Station:", "PS Gulshan-e-Ravi, Lahore")
+    f_act = st.text_input("Law Provisions:", "West Pakistan Family Courts Act, 1964")
+  fam_img = st.file_uploader("Upload Nikah Nama Snapshot [Optional]:", type=["jpg", "png", "jpeg"], key="fimg")
+  is_fm, proc_fm = validate_and_process_image(fam_img)
+  fam_facts = st.text_area("Enter Marriage Details & Specific Claims:", height=150)
+
+  if st.button("🖊️ Generate Family Draft", type="primary"):
+    if not is_fm:
+      st.error("Image processing error!")
+    else:
+      with st.spinner("Drafting family document..."):
+        t_ctx = build_template_context(fam_file)
+        prompt = f"""
+{lang_instruction}
+{t_ctx}
+Generate Family Document for Module: {fam_module}
+- Court: {f_court}
+- Parties: {f_parties}
+- Locality: {f_loc}
+- Provisions: {f_act}
+- Particulars/Facts: {fam_facts}
+"""
+        res = generate_ai_response(prompt, image_file=proc_fm)
+        save_and_display_result(prompt, f"Family Law ({fam_module})", res, language)
+
+elif app_mode == "💻 Cyber Crime Portal":
+  st.subheader("💻 Cyber Crime & FIA Defense Portal")
+  cyb_module = st.selectbox("Choose Cyber Module:", ["Pre-Arrest Bail Petition in FIA Cyber Crime Circle", "Post-Arrest Bail Petition under PECA 2016", "Reply / Legal Response to FIA Inquiry Notice (Section 160 CrPC / PECA)", "Quashing of Inquiry / FIR in Cyber Crime"])
+  cyb_file = st.file_uploader("Upload Template (.docx) [Optional]:", type=["docx"], key="cyb_up")
+  col1, col2 = st.columns(2)
+  with col1:
+    cy_court = st.text_input("Court Forum / FIA Circle:", "Special Judge Central / Sessions Judge, Lahore")
+    cy_parties = st.text_input("Parties Title:", "Salman Khan VS FIA Cyber Crime Circle")
+  with col2:
+    cy_ref = st.text_input("Inquiry / FIR No:", "Inquiry No. 45/2026 / PECA Case")
+    cy_act = st.text_input("Law Provisions:", "Prevention of Electronic Crimes Act (PECA), 2016")
+  cyb_img = st.file_uploader("Upload FIA Notice / Snapshot [Optional]:", type=["jpg", "png", "jpeg"], key="cybimg")
+  is_cy, proc_cy = validate_and_process_image(cyb_img)
+  cyb_facts = st.text_area("Enter Cyber Crime Case Facts & Allegations:", height=150)
+
+  if st.button("🖊️ Generate Cyber Crime Draft", type="primary"):
+    if not is_cy:
+      st.error("Image processing error!")
+    else:
+      with st.spinner("Drafting cyber crime document..."):
+        t_ctx = build_template_context(cyb_file)
+        prompt = f"""
+{lang_instruction}
+{t_ctx}
+Generate Cyber Crime Document for Module: {cyb_module}
+- Court/Circle: {cy_court}
+- Parties: {cy_parties}
+- Inquiry/FIR Reference: {cy_ref}
+- Provisions: {cy_act}
+- Particulars/Facts: {cyb_facts}
+"""
+        res = generate_ai_response(prompt, image_file=proc_cy)
+        save_and_display_result(prompt, f"Cyber Crime ({cyb_module})", res, language)
+
+elif app_mode == "📜 Constitutional / Writ Portal":
+  st.subheader("📜 Constitutional Writ Petition Portal (Article 199)")
+  writ_module = st.selectbox("Choose Writ Module:", ["Writ Petition for Mandamus / Direction (Article 199)", "Writ Petition for Certiorari (Quashing Illegal Order)", "Habeas Corpus Petition (Production of Detenu)", "Writ of Quo-Warranto (Public Office Authority)", "Constitutional Petition against Harassment / Encroachment"])
+  writ_file = st.file_uploader("Upload Template (.docx) [Optional]:", type=["docx"], key="writ_up")
+  col1, col2 = st.columns(2)
+  with col1:
+    w_court = st.text_input("High Court Bench:", "Lahore High Court, Lahore")
+    w_parties = st.text_input("Parties Title:", "Muhammad Akram VS Province of Punjab")
+  with col2:
+    w_dept = st.text_input("Respondent Department:", "Secretary Local Government, Punjab")
+    w_art = st.text_input("Constitutional Article:", "Article 199 of Constitution of Pakistan, 1973")
+  writ_img = st.file_uploader("Upload Impugned Order / Snapshot [Optional]:", type=["jpg", "png", "jpeg"], key="wimg")
+  is_w, proc_w = validate_and_process_image(writ_img)
+  writ_facts = st.text_area("Enter Grievance, Illegal Action & Grounds for Writ:", height=150)
+
+  if st.button("🖊️ Generate Writ Petition Draft", type="primary"):
+    if not is_w:
+      st.error("Image processing error!")
+    else:
+      with st.spinner("Drafting Constitutional Writ Petition..."):
+        t_ctx = build_template_context(writ_file)
+        prompt = f"""
+{lang_instruction}
+{t_ctx}
+Generate Constitutional Writ Petition for Module: {writ_module}
+- Court: {w_court}
+- Parties: {w_parties}
+- Respondent Department: {w_dept}
+- Constitutional Provision: {w_art}
+- Grievance & Facts: {writ_facts}
+"""
+        res = generate_ai_response(prompt, image_file=proc_w)
+        save_and_display_result(prompt, f"Constitutional Writ ({writ_module})", res, language)
+
+elif app_mode == "🌾 Revenue & Property Law Portal":
+  st.subheader("🌾 Revenue & Property Law Portal (Board of Revenue / Tehsildar)")
+  rev_module = st.selectbox("Choose Revenue Module:", ["Appeal before Executive District Officer / Commissioner", "Revision Petition before Board of Revenue (BOR)", "Suit for Partition of Agricultural Land", "Application for Correction of Revenue Record (Intqal / Fard)"])
+  rev_file = st.file_uploader("Upload Template (.docx) [Optional]:", type=["docx"], key="rev_up")
+  col1, col2 = st.columns(2)
+  with col1:
+    r_forum = st.text_input("Revenue Forum:", "Court of Commissioner, Lahore Division")
+    r_parties = st.text_input("Parties Title:", "Allah Ditta VS District Collector")
+  with col2:
+    r_mauza = st.text_input("Mauza / Revenue Estate:", "Mauza Sundar, Tehsil & District Lahore")
+    r_act = st.text_input("Land Revenue Act:", "West Pakistan Land Revenue Act, 1967")
+  rev_img = st.file_uploader("Upload Fard / Mutation Snapshot [Optional]:", type=["jpg", "png", "jpeg"], key="rimg")
+  is_r, proc_r = validate_and_process_image(rev_img)
+  rev_facts = st.text_area("Enter Revenue Dispute Details & Khata/Khasra Numbers:", height=150)
+
+  if st.button("🖊️ Generate Revenue Draft", type="primary"):
+    if not is_r:
+      st.error("Image processing error!")
+    else:
+      with st.spinner("Drafting revenue document..."):
+        t_ctx = build_template_context(rev_file)
+        prompt = f"""
+{lang_instruction}
+{t_ctx}
+Generate Revenue Document for Module: {rev_module}
+- Forum: {r_forum}
+- Parties: {r_parties}
+- Revenue Estate: {r_mauza}
+- Land Revenue Provision: {r_act}
+- Khata/Dispute Details: {rev_facts}
+"""
+        res = generate_ai_response(prompt, image_file=proc_r)
+        save_and_display_result(prompt, f"Revenue Law ({rev_module})", res, language)
+
+elif app_mode == "👥 Client CRM & Records":
+  st.subheader("👥 Chamber Client CRM & Case Record Management")
+  with st.form("client_form"):
+    st.markdown("### Add New Client & Hearing Schedule")
+    col_c1, col_c2 = st.columns(2)
+    with col_c1:
+      c_name = st.text_input("Client Full Name:")
+      c_phone = st.text_input("WhatsApp Phone Number (e.g. 923056776645):", value="92")
+      c_fir = st.text_input("FIR No. / Case Reference:")
+    with col_c2:
+      c_court = st.text_input("Court Name / Judge:")
+      c_date = st.date_input("Next Hearing Date:", value=date.today())
+      c_notes = st.text_area("Case Notes / Remarks:")
+    
+    submitted = st.form_submit_button("💾 Save Client & Hearing")
+    if submitted:
+      if c_name and c_fir:
+        new_client_rec = {
+            "name": c_name,
+            "phone": c_phone,
+            "fir": c_fir,
+            "court": c_court,
+            "date": str(c_date),
+            "notes": c_notes,
+        }
+        st.session_state.clients.append(new_client_rec)
+        save_clients_to_csv()
+        st.success(f"Client {c_name} successfully saved to chamber records!")
+      else:
+        st.error("Please provide at least Client Name and FIR/Case Reference.")
+
+  st.markdown("---")
+  st.markdown("### 📋 Existing Chamber Clients & Case List")
+  if not st.session_state.clients:
+    st.info("No client records found in database.")
+  else:
+    for idx, client_item in enumerate(st.session_state.clients):
+      col_item1, col_item2 = st.columns([4, 1])
+      with col_item1:
+        st.markdown(f"**{idx+1}. {client_item['name']}** | FIR: `{client_item['fir']}` | Court: `{client_item.get('court','N/A')}` | Hearing: `{client_item.get('date','N/A')}`")
+        if client_item.get('notes'):
+          st.caption(f"Notes: {client_item['notes']}")
+      with col_item2:
+        if st.button("🗑️ Delete", key=f"del_client_{idx}"):
+          st.session_state.clients.pop(idx)
+          save_clients_to_csv()
+          st.rerun()
+      st.markdown("---")
+
+elif app_mode == "💰 Fee & Invoice Manager":
+  st.subheader("💰 Chamber Fee & Professional Invoice Manager")
+  with st.form("invoice_form"):
+    st.markdown("### Create Professional Chamber Fee Bill / Invoice")
+    col_i1, col_i2 = st.columns(2)
+    with col_i1:
+      inv_client = st.text_input("Client Name:")
+      inv_ref = st.text_input("Case Reference / Title:")
+    with col_i2:
+      inv_amount = st.text_input("Fee Amount (PKR):", "50,000")
+      inv_status = st.selectbox("Payment Status:", ["Unpaid", "Paid", "Partially Paid"])
+    
+    inv_date_str = str(date.today())
+    inv_submitted = st.form_submit_button("📄 Generate & Save Invoice")
+    if inv_submitted:
+      if inv_client and inv_amount:
+        new_inv = {
+            "client_name": inv_client,
+            "case_ref": inv_ref,
+            "fee_amount": inv_amount,
+            "status": inv_status,
+            "date": inv_date_str,
+        }
+        st.session_state.invoices.append(new_inv)
+        save_invoices_to_csv()
+        st.success("Invoice successfully created and saved!")
+      else:
+        st.error("Please enter Client Name and Fee Amount.")
+
+  st.markdown("---")
+  st.markdown("### 📑 Chamber Invoices & Ledger")
+  if not st.session_state.invoices:
+    st.info("No invoices found.")
+  else:
+    for idx, inv in enumerate(st.session_state.invoices):
+      st.markdown(
+          f"""
+          <div style="padding: 12px; margin-bottom: 8px; background-color: #ffffff; border: 1px solid #dcdcdc; border-radius: 5px;">
+              <b>Client:</b> {inv['client_name']} &nbsp;|&nbsp; <b>Case:</b> {inv['case_ref']} <br>
+              <b>Amount:</b> PKR {inv['fee_amount']} &nbsp;|&nbsp; <b>Status:</b> <span style="color: {'green' if inv['status']=='Paid' else 'red'}; font-weight:bold;">{inv['status']}</span> &nbsp;|&nbsp; <b>Date:</b> {inv['date']}
+          </div>
+          """,
+          unsafe_allow_html=True,
+      )
+
+elif app_mode == "📜 Search & Draft History":
+  st.subheader("📜 Chamber Search & AI Draft History")
+  print_page_button()
+
+  if not st.session_state.history:
+    st.info("No draft or research history found.")
+  else:
+    if st.button("🗑️ Clear All History"):
+      st.session_state.history = []
+      save_history_to_json()
+      st.rerun()
+
+    for idx, hist in enumerate(reversed(st.session_state.history)):
+      with st.expander(f"🕒 [{hist['time']}] {hist['type']} - {hist['query']} (Lang: {hist.get('lang','English')})"):
+        display_output(hist["result"], hist.get("lang", "English"))
+        st.download_button(
+            "📥 Download as Word (.docx)",
+            create_word_document(hist["result"], "Urdu" in hist.get("lang", "")),
+            f"History_Draft_{idx}_{datetime.now().strftime('%d%m%Y')}.docx",
+            key=f"hist_dl_{idx}",
+        )
