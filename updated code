@@ -143,165 +143,180 @@ def save_users(users_db):
 def hash_password(password):
   return hashlib.sha256(password.encode()).hexdigest()
 
-if "authenticated_user" not in st.session_state:
-  st.session_state.authenticated_user = None
-
-if "device_token" not in st.session_state:
-  st.session_state.device_token = str(uuid.uuid4())
-
 users_db = load_users()
 
 # ---------------------------------------------------------------------
-# LOGIN & SIGNUP SCREEN
+# LOGIN & SIGNUP SCREEN# Persistent Login Session across refreshes
+if "authenticated_user" not in st.session_state:
+    saved_user = st.query_params.get("user", None)
+    if saved_user and saved_user in users_db:
+        st.session_state.authenticated_user = saved_user
+    else:
+        st.session_state.authenticated_user = None
+
+# Persistent Device Token across sessions & IP changes
+if "device_token" not in st.session_state:
+    if "dev_id" in st.query_params:
+        st.session_state.device_token = st.query_params["dev_id"]
+    else:
+        new_token = str(uuid.uuid4())
+        st.session_state.device_token = new_token
+        st.query_params["dev_id"] = new_token
 # ---------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# LOGIN & SIGNUP SCREEN
 if st.session_state.authenticated_user is None:
-  st.title("⚖️ PAKISTANI LEGAL AI PORTAL - CHAMBER ACCESS")
-  st.caption("Bar Chamber Management Portal - Secure Subscription & Access System")
-  st.markdown("---")
+    st.title("⚖️ PAKISTANI LEGAL AI PORTAL - CHAMBER ACCESS")
+    st.caption("Bar Chamber Management Portal - Secure Subscription & Access System")
+    st.markdown("---")
 
-  tab_login, tab_signup, tab_pricing = st.tabs(["🔐 Chamber Login", "📝 Register New Chamber", "💰 Packages & Pricing"])
+    tab_login, tab_signup, tab_pricing = st.tabs(["🔐 Chamber Login", "📝 Register New Chamber", "💰 Packages & Pricing"])
 
-  with tab_login:
-    st.subheader("Login to Your Chamber Account")
-    login_user = st.text_input("Chamber Username / ID:", key="login_user")
-    login_pass = st.text_input("Password:", type="password", key="login_pass")
+    with tab_login:
+        st.subheader("Login to Your Chamber Account")
+        login_user = st.text_input("Chamber Username / ID:", key="login_user")
+        login_pass = st.text_input("Password:", type="password", key="login_pass")
 
-    if st.button("🔑 Login to Chamber", type="primary"):
-      hashed_pass = hash_password(login_pass)
-      if login_user in users_db and users_db[login_user]["password"] == hashed_pass:
-        user_data = users_db[login_user]
-        
-        # Check Expiry Date (except for admin)
-        if not user_data.get("is_admin", False):
-          exp_date = user_data.get("expiry_date", str(date.today()))
-          if str(date.today()) > exp_date:
-            wa_msg = f"AoA {ADMIN_NAME}, mera chamber account ({login_user}) expire ho gaya hai. Mujhe subscription renew karwani hai."
-            st.error("⏳ **Subscription Expired!** Aapke account ki 3 days trial/monthly muddat khatam ho chuki hai.")
-            render_payment_and_contact_card(wa_msg)
-            st.stop()
+        if st.button("🔑 Login to Chamber", type="primary"):
+            hashed_pass = hash_password(login_pass)
+            if login_user in users_db and users_db[login_user]["password"] == hashed_pass:
+                user_data = users_db[login_user]
+                
+                # Check Expiry Date (except for admin)
+                if not user_data.get("is_admin", False):
+                    exp_date = user_data.get("expiry_date", str(date.today()))
+                    if str(date.today()) > exp_date:
+                        wa_msg = f"AoA {ADMIN_NAME}, mera chamber account ({login_user}) expire ho gaya hai. Mujhe subscription renew karwani hai."
+                        st.error("⏳ **Subscription Expired!** Aapke account ki muddat khatam ho chuki hai.")
+                        render_payment_and_contact_card(wa_msg)
+                        st.stop()
 
-       # Check Device Limits (Premium: Max 3 devices, Basic/Standard: Max 2 devices)
-        if "active_devices" not in user_data:
-            user_data["active_devices"] = []
+                if "active_devices" not in user_data:
+                    user_data["active_devices"] = []
 
-        current_token = st.session_state.device_token
-        max_allowed_devices = 3 if user_data.get("package") == "premium" else 2
+                current_token = st.session_state.device_token
+                max_allowed_devices = 3 if user_data.get("package") == "premium" else 2
 
-        if current_token not in user_data["active_devices"]:
-            if len(user_data["active_devices"]) >= max_allowed_devices and not user_data.get("is_admin", False):
-                st.error(f"⚠️ **Device Limit Exceeded!** Aapke package `{user_data.get('package', '').upper()}` mein maximum {max_allowed_devices} devices allowed hain.")
+                # Check Device Limits
+                if current_token not in user_data["active_devices"]:
+                    if len(user_data["active_devices"]) >= max_allowed_devices and not user_data.get("is_admin", False):
+                        st.error(f"⚠️ **Device Limit Exceeded!** Aapke package `{user_data.get('package', '').upper()}` mein maximum {max_allowed_devices} devices allowed hain.")
+                    else:
+                        user_data["active_devices"].append(current_token)
+                        save_users(users_db)
+                        
+                        st.session_state.authenticated_user = login_user
+                        st.query_params["user"] = login_user
+                        st.query_params["dev_id"] = current_token
+                        st.success(f"Welcome, {user_data['chamber_name']}!")
+                        st.rerun()
+                else:
+                    st.session_state.authenticated_user = login_user
+                    st.query_params["user"] = login_user
+                    st.query_params["dev_id"] = current_token
+                    st.success(f"Welcome, {user_data['chamber_name']}!")
+                    st.rerun()
             else:
-                user_data["active_devices"].append(current_token)
-                save_users(users_db)
-                st.session_state.authenticated_user = login_user
-                st.success(f"Welcome, {user_data['chamber_name']}!")
-                st.rerun()
-        else:
-            st.session_state.authenticated_user = login_user
-            st.success(f"Welcome, {user_data['chamber_name']}!")
-            st.rerun()
-      else:
-        st.error("Invalid Username or Password!")
+                st.error("Invalid Username or Password!")
 
-  with tab_signup:
-    st.subheader("Create a New Chamber Profile (3-Days Free Trial)")
-    st.info("💡 Naya account banane par aapko **3 din ka Free Trial** milega.")
-    new_chamber = st.text_input("Chamber / Law Firm Name:")
-    new_user = st.text_input("Choose Username / Chamber ID:")
-    new_pass = st.text_input("Choose Password:", type="password")
-    new_package = st.selectbox("Select Desired Package:", ["Basic (PKR 2,500/mo - 15 prompts/day)", "Standard (PKR 4,000/mo - 25 prompts/day)", "Premium (PKR 6,500/mo - Unlimited)"])
+    with tab_signup:
+        st.subheader("Create a New Chamber Profile (3-Days Free Trial)")
+        st.info("💡 Naya account banane par aapko **3 din ka Free Trial** milega.")
+        new_chamber = st.text_input("Chamber / Law Firm Name:")
+        new_user = st.text_input("Choose Username / Chamber ID:")
+        new_pass = st.text_input("Choose Password:", type="password")
+        new_package = st.selectbox("Select Desired Package:", ["Basic (PKR 2,500/mo - 15 prompts/day)", "Standard (PKR 4,000/mo - 25 prompts/day)", "Premium (PKR 6,500/mo - Unlimited)"])
 
-    if st.button("✨ Register Chamber"):
-      if new_chamber and new_user and new_pass:
-        if new_user in users_db:
-          st.error("Username already exists! Please choose another.")
-        else:
-          pkg_key = "basic"
-          if "Standard" in new_package:
-            pkg_key = "standard"
-          elif "Premium" in new_package:
-            pkg_key = "premium"
+        if st.button("✨ Register Chamber"):
+            if new_chamber and new_user and new_pass:
+                if new_user in users_db:
+                    st.error("Username already exists! Please choose another.")
+                else:
+                    pkg_key = "basic"
+                    if "Standard" in new_package:
+                        pkg_key = "standard"
+                    elif "Premium" in new_package:
+                        pkg_key = "premium"
 
-          # 3 Days Trial Automatic Allocation
-          trial_expiry = str(date.today() + timedelta(days=3))
+                    trial_expiry = str(date.today() + timedelta(days=3))
 
-          users_db[new_user] = {
-              "chamber_name": new_chamber,
-              "password": hash_password(new_pass),
-              "package": pkg_key,
-              "prompt_count": 0,
-              "last_reset_date": str(date.today()),
-              "expiry_date": trial_expiry,
-              "is_admin": False,
-              "active_devices": []
-          }
-          save_users(users_db)
-          st.success("🎉 Registration successful! Aapka 3-Days Free Trial active ho gaya hai. Aap ab login kar sakte hain.")
-      else:
-        st.error("Please fill in all registration details.")
+                    users_db[new_user] = {
+                        "chamber_name": new_chamber,
+                        "password": hash_password(new_pass),
+                        "package": pkg_key,
+                        "prompt_count": 0,
+                        "last_reset_date": str(date.today()),
+                        "expiry_date": trial_expiry,
+                        "is_admin": False,
+                        "active_devices": []
+                    }
+                    save_users(users_db)
+                    st.success("🎉 Registration successful! Aapka 3-Days Free Trial active ho gaya hai. Aap ab login kar sakte hain.")
+            else:
+                st.error("Please fill in all registration details.")
 
-  with tab_pricing:
-    st.subheader("📦 Available Chamber Subscription Packages")
-    col_p1, col_p2, col_p3 = st.columns(3)
-    
-    with col_p1:
-      st.markdown(
-          """
-          <div style="background: white; padding: 20px; border-radius: 10px; border-top: 4px solid #28a745; box-shadow: 0 2px 10px rgba(0,0,0,0.05); text-align: center;">
-              <h3 style="color: #28a745; margin-bottom: 5px;">🟢 Basic</h3>
-              <h2 style="color: #333; margin: 10px 0;">PKR 2,500 <span style="font-size: 14px; color: #777;">/ Month</span></h2>
-              <p style="font-weight: bold; color: #1b4332;">15 Prompts / Day</p>
-              <hr style="border: 0.5px solid #eee;">
-              <p style="font-size: 13px; color: #555; line-height: 1.8;">
-                  ✅ All Law Practice Modules<br>
-                  ✅ Access on 2 Devices<br>
-                  ✅ Daily Limits Reset
-              </p>
-          </div>
-          """,
-          unsafe_allow_html=True,
-      )
-      
-    with col_p2:
-      st.markdown(
-          """
-          <div style="background: white; padding: 20px; border-radius: 10px; border-top: 4px solid #007bff; box-shadow: 0 2px 10px rgba(0,0,0,0.05); text-align: center;">
-              <h3 style="color: #007bff; margin-bottom: 5px;">🔵 Standard</h3>
-              <h2 style="color: #333; margin: 10px 0;">PKR 4,000 <span style="font-size: 14px; color: #777;">/ Month</span></h2>
-              <p style="font-weight: bold; color: #1b4332;">25 Prompts / Day</p>
-              <hr style="border: 0.5px solid #eee;">
-              <p style="font-size: 13px; color: #555; line-height: 1.8;">
-                  ✅ All Law Practice Modules<br>
-                  ✅ Access on 2 Devices<br>
-                  ✅ Daily Limits Reset
-              </p>
-          </div>
-          """,
-          unsafe_allow_html=True,
-      )
+    with tab_pricing:
+        st.subheader("📦 Available Chamber Subscription Packages")
+        col_p1, col_p2, col_p3 = st.columns(3)
+        
+        with col_p1:
+            st.markdown(
+                """
+                <div style="background: white; padding: 20px; border-radius: 10px; border-top: 4px solid #28a745; box-shadow: 0 2px 10px rgba(0,0,0,0.05); text-align: center;">
+                    <h3 style="color: #28a745; margin-bottom: 5px;">🟢 Basic</h3>
+                    <h2 style="color: #333; margin: 10px 0;">PKR 2,500 <span style="font-size: 14px; color: #777;">/ Month</span></h2>
+                    <p style="font-weight: bold; color: #1b4332;">15 Prompts / Day</p>
+                    <hr style="border: 0.5px solid #eee;">
+                    <p style="font-size: 13px; color: #555; line-height: 1.8;">
+                        ✅ All Law Practice Modules<br>
+                        ✅ Access on 2 Devices<br>
+                        ✅ Daily Limits Reset
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            
+        with col_p2:
+            st.markdown(
+                """
+                <div style="background: white; padding: 20px; border-radius: 10px; border-top: 4px solid #007bff; box-shadow: 0 2px 10px rgba(0,0,0,0.05); text-align: center;">
+                    <h3 style="color: #007bff; margin-bottom: 5px;">🔵 Standard</h3>
+                    <h2 style="color: #333; margin: 10px 0;">PKR 4,000 <span style="font-size: 14px; color: #777;">/ Month</span></h2>
+                    <p style="font-weight: bold; color: #1b4332;">25 Prompts / Day</p>
+                    <hr style="border: 0.5px solid #eee;">
+                    <p style="font-size: 13px; color: #555; line-height: 1.8;">
+                        ✅ All Law Practice Modules<br>
+                        ✅ Access on 2 Devices<br>
+                        ✅ Daily Limits Reset
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
-    with col_p3:
-      st.markdown(
-          """
-          <div style="background: white; padding: 20px; border-radius: 10px; border-top: 4px solid #d9534f; box-shadow: 0 2px 10px rgba(0,0,0,0.05); text-align: center;">
-              <h3 style="color: #d9534f; margin-bottom: 5px;">👑 Premium</h3>
-              <h2 style="color: #333; margin: 10px 0;">PKR 6,500 <span style="font-size: 14px; color: #777;">/ Month</span></h2>
-              <p style="font-weight: bold; color: #1b4332;">Unlimited Prompts</p>
-              <hr style="border: 0.5px solid #eee;">
-              <p style="font-size: 13px; color: #555; line-height: 1.8;">
-                  ✅ All Law Practice Modules<br>
-                  ✅ Access on 2 Devices<br>
-                  ✅ High Priority AI Server
-              </p>
-          </div>
-          """,
-          unsafe_allow_html=True,
-      )
+        with col_p3:
+            st.markdown(
+                """
+                <div style="background: white; padding: 20px; border-radius: 10px; border-top: 4px solid #d9534f; box-shadow: 0 2px 10px rgba(0,0,0,0.05); text-align: center;">
+                    <h3 style="color: #d9534f; margin-bottom: 5px;">👑 Premium</h3>
+                    <h2 style="color: #333; margin: 10px 0;">PKR 6,500 <span style="font-size: 14px; color: #777;">/ Month</span></h2>
+                    <p style="font-weight: bold; color: #1b4332;">Unlimited Prompts</p>
+                    <hr style="border: 0.5px solid #eee;">
+                    <p style="font-size: 13px; color: #555; line-height: 1.8;">
+                        ✅ All Law Practice Modules<br>
+                        ✅ Access on 3 Devices<br>
+                        ✅ High Priority AI Server
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
-    st.markdown("<br>", unsafe_allow_html=True)
-    render_payment_and_contact_card(f"AoA {ADMIN_NAME}, mujhe naya package buy karna hai.")
+        st.markdown("<br>", unsafe_allow_html=True)
+        render_payment_and_contact_card(f"AoA {ADMIN_NAME}, mujhe naya package buy karna hai.")
 
-  st.stop()
+    st.stop()
 
 # ---------------------------------------------------------------------
 # USER-SPECIFIC DATA & PACKAGE USAGE CHECK
@@ -426,18 +441,20 @@ st.sidebar.markdown(
 )
 
 if st.sidebar.button("🚪 Logout Chamber"):
-  if current_user in users_db and "active_devices" in users_db[current_user]:
-    if st.session_state.device_token in users_db[current_user]["active_devices"]:
-      users_db[current_user]["active_devices"].remove(st.session_state.device_token)
-      save_users(users_db)
-      
-  st.session_state.authenticated_user = None
-  st.session_state.clients = []
-  st.session_state.invoices = []
-  st.session_state.history = []
-  for key in list(st.session_state.keys()):
-    del st.session_state[key]
-  st.rerun()
+    if current_user in users_db and "active_devices" in users_db[current_user]:
+        if st.session_state.device_token in users_db[current_user]["active_devices"]:
+            users_db[current_user]["active_devices"].remove(st.session_state.device_token)
+            save_users(users_db)
+            
+    st.session_state.authenticated_user = None
+    if "user" in st.query_params:
+        del st.query_params["user"]
+    st.session_state.clients = []
+    st.session_state.invoices = []
+    st.session_state.history = []
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.title("🌐 Select Language")
